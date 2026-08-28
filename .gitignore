@@ -8,3 +8,5 @@ __pycache__/
 .godot/
 *.import
 .vscode
+*.log
+*.jsonl

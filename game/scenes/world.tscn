@@ -18,20 +18,41 @@ text = "AI World — Godot executes, AI suggests"
 theme_override_colors/font_color = Color(0.7, 0.9, 1, 1)
 theme_override_font_sizes/font_size = 22
 
-[node name="Apple" type="Node2D" parent="."]
-position = Vector2(480, 315)
-
-[node name="Fruit" type="Polygon2D" parent="Apple"]
-polygon = PackedVector2Array(0, -18, 14, -10, 18, 4, 10, 18, -10, 18, -18, 4, -14, -10)
-color = Color(0.95, 0.2, 0.18, 1)
-
-[node name="Label" type="Label" parent="Apple"]
-position = Vector2(-35, 25)
-size = Vector2(70, 24)
-text = "Apple"
-horizontal_alignment = 1
-
 [node name="Agents" type="Node2D" parent="."]
+
+[node name="Environment" type="Node2D" parent="."]
+
+[node name="Berry_Bush_1" type="Node2D" parent="Environment"]
+position = Vector2(280, 180)
+metadata/entity_type = "berry_bush"
+
+[node name="Berry" type="Polygon2D" parent="Environment/Berry_Bush_1"]
+polygon = PackedVector2Array(-18, 0, -9, -16, 9, -16, 18, 0, 9, 16, -9, 16)
+color = Color(0.65, 0.2, 0.8, 1)
+
+[node name="Water_1" type="Node2D" parent="Environment"]
+position = Vector2(720, 190)
+metadata/entity_type = "water"
+
+[node name="Water" type="Polygon2D" parent="Environment/Water_1"]
+polygon = PackedVector2Array(-55, -20, 55, -20, 65, 20, -55, 20)
+color = Color(0.15, 0.55, 0.95, 1)
+
+[node name="Tree_1" type="Node2D" parent="Environment"]
+position = Vector2(120, 350)
+metadata/entity_type = "tree"
+
+[node name="Tree" type="Polygon2D" parent="Environment/Tree_1"]
+polygon = PackedVector2Array(0, -35, 28, 20, -28, 20)
+color = Color(0.15, 0.55, 0.25, 1)
+
+[node name="Rock_1" type="Node2D" parent="Environment"]
+position = Vector2(800, 360)
+metadata/entity_type = "rock"
+
+[node name="Rock" type="Polygon2D" parent="Environment/Rock_1"]
+polygon = PackedVector2Array(-22, 12, -10, -16, 18, -8, 25, 14)
+color = Color(0.45, 0.48, 0.52, 1)
 
 [node name="Alice" parent="Agents" instance=ExtResource("2")]
 position = Vector2(440, 280)

@@ -1,744 +1,1142 @@
-# AI World — Implement V3 to V6: Social Autonomous Agents
+# AI World V7 — Survival World, Perception, Affordances & Generic Actions
 
-The current AI World prototype is working.
+The project currently has a working V6.5 autonomous social-agent architecture.
 
-Current architecture:
+Current features include:
 
-Godot 4
-→ Agent observes world
-→ FastAPI
-→ AI provider
-→ structured decision
-→ Godot validates action
-→ Godot executes action
+* Godot 4 2D world
+* Python/FastAPI AI backend
+* OpenAI + fake AI providers
+* multiple autonomous agents
+* structured AI decisions
+* personalities
+* relationships
+* subjective memories
+* structured world events
+* agent-to-agent conversations
+* conversation threads
+* decision triggers
+* action/goal commitment
+* anti-repetition
+* world-authoritative action validation
 
-Current world:
+Now implement V7.
 
-* Alice
-* Bob
-* one Apple
+The objective of V7 is NOT to create a complicated survival game.
 
-Current actions:
+The objective is to give the autonomous agents a simple physical world in which they must:
 
-* take_apple
-* talk
-* wander
-* wait
+* explore
+* discover resources
+* become hungry/thirsty/tired
+* find food
+* find water
+* gather resources
+* consume resources
+* remember locations
+* optionally help other agents
+* make decisions using only what they personally know
 
-Example current event log:
+The world must remain authoritative.
 
-[08:34:03] World ready. Apple is available.
-[08:34:09] Bob observes Alice, Apple
-[08:34:09] Bob decided TAKE_APPLE
-[08:34:09] Bob took Apple.
-[08:34:09] Alice observes Bob
-[08:34:09] Alice decided TALK
-[08:34:09] Alice: Hello Bob. What should we do next?
-[08:34:14] Bob observes Alice
-[08:34:14] Bob decided TALK
-[08:34:14] Bob: Hello Alice. What should we do next?
-[08:34:14] Alice observes Bob
-[08:34:14] Alice decided TALK
-[08:34:14] Alice: Hello Bob. What should we do next?
+The LLM decides INTENT.
 
-The fundamental vertical slice works.
-
-The problem is that the agents currently behave mostly statelessly:
-
-* conversations repeat
-* agents do not meaningfully remember previous events
-* Bob taking the apple has little future consequence
-* relationships do not evolve
-* conversations are not real multi-turn interactions
-* personality has little persistent influence
-
-Implement V3–V6 to turn Alice and Bob into persistent social agents.
-
-IMPORTANT:
-
-Do not build the larger survival world yet.
-
-Do NOT add:
-
-* trees
-* crafting
-* houses
-* animals
-* economy
-* combat
-* jobs
-* generations
-* PostgreSQL
-* vector databases
-* embeddings
-* RAG
-* LangChain
-* complex agent frameworks
-
-We will build the world after this milestone.
-
-Keep the architecture simple and understandable.
+Godot decides PHYSICAL REALITY.
 
 ---
 
-## V3 — MULTIPLE AUTONOMOUS AGENTS
+# CORE DESIGN PRINCIPLE
 
-Generalize the existing Alice/Bob implementation so the system supports an arbitrary number of agents.
+Maintain this architecture:
 
-The world should not contain hardcoded logic such as:
+WORLD TRUTH
+↓
+PERCEPTION
+↓
+SUBJECTIVE KNOWLEDGE
+↓
+GOAL
+↓
+AI DECISION
+↓
+GENERIC ACTION
+↓
+GODOT VALIDATION
+↓
+EXECUTION
+↓
+ACTION RESULT
+↓
+EVENT / MEMORY
+↓
+NEXT DECISION
 
-if Alice...
-if Bob...
+Do NOT give the LLM direct control over game state.
 
-Agents should be instances of the same reusable Agent scene/class.
+Do NOT give agents omniscient knowledge of the map.
 
-Each agent should have:
+---
+
+# 1. CREATE A SIMPLE FOREST WORLD
+
+Replace/expand the empty test room with a larger 2D map.
+
+Do NOT spend significant time on graphics.
+
+Simple colored shapes, generated visuals, labels, or existing simple project assets are sufficient.
+
+The map should contain:
+
+* open ground
+* trees
+* berry bushes
+* water sources
+* rocks
+* Alice
+* Bob
+* Charlie
+
+Conceptually:
+
+🌲      🌲             🫐
+
+```
+   Alice
+
+                🌲
+```
+
+```WATER ~~~~~~~~~
+
+               Bob
+
+     🪨                    🌲
+
+              🫐
+
+                         Charlie
+
+🌲        🌲
+
+The world should be significantly larger than the visible screen so exploration matters.
+
+Use a camera system if necessary.
+
+Do not implement procedural world generation yet.
+
+A manually/configurably populated map is sufficient.
+
+---
+
+# 2. RESOURCE TYPES
+
+Implement four basic environment entities.
+
+## Tree
+
+Properties:
 
 id
-name
-personality
-hunger
-energy
+type = "tree"
 position
-current_action
-current_goal
-relationships
-memories
+
+For V7 trees are mostly environmental objects.
+
+Affordances may be empty or include inspect.
+
+DO NOT implement cutting trees yet.
+
+---
+
+## BerryBush
+
+Properties:
+
+id
+type = "berry_bush"
+position
+berries_available
+max_berries
 
 Example:
 
-Alice:
-{
-"id": "alice",
-"name": "Alice",
-"personality": {
-"friendliness": 0.9,
-"cooperation": 0.9,
-"curiosity": 0.8,
-"selfishness": 0.1,
-"aggression": 0.1
-}
-}
+berries_available = 5
 
-Bob:
-{
-"id": "bob",
-"name": "Bob",
-"personality": {
-"friendliness": 0.3,
-"cooperation": 0.2,
-"curiosity": 0.5,
-"selfishness": 0.8,
-"aggression": 0.4
-}
-}
+Affordances:
 
-Use normalized personality values from 0.0 to 1.0.
+gather
 
-Do not hardcode behavior based on names.
+When an agent gathers:
 
-The system should work if later I add:
+berries_available decreases
 
-Charlie
-Diana
-Marco
-Sofia
+Agent inventory receives berries.
 
-without modifying the AI architecture.
+When empty:
 
-For this version Alice and Bob are sufficient for the default scene, but adding another Agent instance should require minimal configuration.
+gather should no longer be available.
+
+OPTIONAL:
+
+Simple berry regeneration after a configurable long interval is acceptable.
+
+If implemented, keep it deterministic and configurable.
 
 ---
 
-## AGENT GOALS
+## WaterSource
 
-Introduce a simple current_goal field.
+Properties:
+
+id
+type = "water"
+position
+
+Affordances:
+
+drink
+
+Water does not need to deplete in V7.
+
+---
+
+## Rock
+
+Properties:
+
+id
+type = "rock"
+position
+
+For V7 rocks are environmental objects.
+
+Do NOT implement mining yet.
+
+---
+
+# 3. INVENTORY
+
+Give each agent a simple inventory.
+
+Do not build a complex RPG inventory UI.
+
+A dictionary/map is enough.
+
+Example:
+
+{
+    "berry": 3
+}
+
+Support at minimum:
+
+berry
+
+Create clean methods such as:
+
+add_item()
+remove_item()
+has_item()
+get_item_count()
+
+Inventory belongs to the authoritative Godot world.
+
+The LLM cannot invent inventory items.
+
+---
+
+# 4. NEEDS
+
+Agents currently have hunger and energy.
+
+Add/standardize:
+
+hunger
+thirst
+energy
+
+Use a consistent scale.
+
+Recommended:
+
+0 = fully satisfied
+100 = critical need
+
+Example:
+
+hunger:
+0 → full
+100 → starving
+
+thirst:
+0 → hydrated
+100 → severely thirsty
+
+energy:
+100 → fully rested
+0 → exhausted
+
+If changing existing energy semantics would create unnecessary regressions, preserve the current semantics but document them clearly.
+
+Needs should change gradually over simulated time.
+
+Example configurable rates:
+
+hunger increases slowly
+thirst increases somewhat faster
+energy decreases slowly while active
+
+Do NOT tie these directly to frame rate.
+
+Use simulation time/ticks.
+
+Keep rates configurable.
+
+---
+
+# 5. NEED THRESHOLDS
+
+Define useful thresholds.
+
+Example:
+
+HUNGER:
+
+0–39:
+normal
+
+40–69:
+hungry
+
+70–89:
+very hungry
+
+90–100:
+critical
+
+THIRST:
+
+same concept
+
+ENERGY:
+
+100–61:
+normal
+
+60–31:
+tired
+
+30–11:
+very tired
+
+10–0:
+critical
+
+These thresholds should help trigger decisions.
+
+Do not hardcode them across many files.
+
+Centralize/configure them.
+
+---
+
+# 6. GENERIC ACTION SYSTEM
+
+Refactor the current special-purpose actions toward generic actions.
+
+V7 should support:
+
+wander
+explore
+gather
+eat
+drink
+give
+talk
+rest
+wait
+
+Remove or deprecate `take_apple` as a special world-specific action.
+
+The single Apple test may remain as a regression/test scene if useful, but the main survival world should not depend on `take_apple`.
+
+The AI decision structure should look conceptually like:
+
+{
+    "agent_id": "alice",
+    "goal": "find_food",
+    "action": "gather",
+    "target_id": "berry_bush_4",
+    "parameters": {},
+    "message": null,
+    "reason": "I am hungry and I found berries."
+}
+
+Not every action requires target_id.
+
+Examples:
+
+wander:
+target_id = null
+
+rest:
+target_id = null
+
+eat:
+target_id may be an inventory item/type
+
+talk:
+target_id = another agent
+
+give:
+target_id = another agent
+parameters = {
+    "item": "berry",
+    "quantity": 1
+}
+
+---
+
+# 7. AFFORDANCE SYSTEM
+
+Do NOT maintain one huge global list of actions that are always possible.
+
+World entities should expose AFFORDANCES.
+
+An affordance means:
+
+"What can this agent potentially do with this object?"
+
+Examples:
+
+BerryBush:
+gather
+
+WaterSource:
+drink
+
+Agent:
+talk
+give
+
+Tree:
+inspect, if inspect exists
+
+Rock:
+inspect, if inspect exists
+
+The agent's perception should include available interactions.
+
+Example:
+
+{
+    "id": "berry_bush_4",
+    "type": "berry_bush",
+    "distance": 42,
+    "position_relative": {
+        "x": 20,
+        "y": -15
+    },
+    "affordances": [
+        "gather"
+    ]
+}
+
+Water:
+
+{
+    "id": "water_1",
+    "type": "water",
+    "distance": 120,
+    "affordances": [
+        "drink"
+    ]
+}
+
+Bob:
+
+{
+    "id": "bob",
+    "type": "agent",
+    "distance": 30,
+    "affordances": [
+        "talk",
+        "give"
+    ]
+}
+
+Affordances describe possible interactions.
+
+Godot STILL validates whether an attempted action succeeds.
+
+---
+
+# 8. PERCEPTION RADIUS
+
+Agents must NOT see the entire world.
+
+Give agents a configurable perception radius.
+
+Example:
+
+PERCEPTION_RADIUS = 250 pixels
+
+Only entities within perception range should be included in visible_entities.
+
+Do not implement complicated vision cones or raycasting yet.
+
+Distance-based perception is sufficient.
+
+This means:
+
+Alice may see:
+
+tree_4
+berry_bush_2
+
+Bob may see:
+
+water_1
+rock_7
+
+Charlie may see:
+
+nothing useful
+
+Each agent has different information.
+
+This is essential.
+
+---
+
+# 9. NO GLOBAL MAP KNOWLEDGE
+
+The AI backend must NOT receive:
+
+- complete resource list
+- all berry bushes
+- all water sources
+- complete map
+- positions of unseen agents
+- positions of unseen resources
+
+Only send:
+
+current perception
+personal memories
+personal known locations
+current needs
+inventory
+relationships
+messages
+current goal
+
+Godot knows everything.
+
+Agents do not.
+
+---
+
+# 10. KNOWN LOCATIONS
+
+Add simple personal location memory.
+
+When an agent perceives an important resource, remember it.
+
+Example:
+
+Alice discovers:
+
+berry_bush_4 at world position (700, 300)
+
+Alice knowledge:
+
+known_locations = {
+    "berry_bush_4": {
+        "type": "berry_bush",
+        "last_known_position": [700, 300],
+        "last_seen_tick": 400
+    }
+}
+
+Bob does NOT automatically receive this information.
+
+Known locations are agent-specific.
+
+Store at minimum:
+
+entity_id
+entity_type
+last_known_position
+last_seen_tick
+
+Do NOT implement a knowledge graph.
+
+---
+
+# 11. STALE KNOWLEDGE
+
+Known locations are memories, not world truth.
+
+Example:
+
+Alice remembers:
+
+berry_bush_4 has berries.
+
+Later Bob gathers all berries.
+
+Alice may still believe berries exist there until she returns and observes the empty bush.
+
+This is GOOD.
+
+Do not automatically synchronize agent knowledge with world truth.
+
+When Alice revisits the bush:
+
+WORLD:
+berries = 0
+
+Alice observes this and updates her knowledge.
+
+This distinction is important for future emergent behavior.
+
+---
+
+# 12. EXPLORE ACTION
+
+Implement `explore` differently from `wander`.
+
+WANDER:
+
+casual/random nearby movement.
+
+EXPLORE:
+
+move toward an area the agent has not recently visited.
+
+Keep this simple.
+
+Possible implementation:
+
+Divide map into coarse exploration cells/grid regions.
+
+Each agent tracks visited regions.
+
+Explore selects a nearby low-visited/unvisited region.
+
+Do NOT use the LLM to generate coordinates.
+
+The AI chooses:
+
+{
+    "action": "explore"
+}
+
+Godot chooses an appropriate unexplored destination.
+
+This allows agents to discover resources naturally.
+
+---
+
+# 13. MOVEMENT
+
+Use Godot navigation or the existing movement implementation.
+
+The LLM must NOT produce:
+
+move north
+move north
+move east
+move east
+
+The LLM chooses:
+
+explore
+wander
+go toward known resource if supported
+
+Godot handles:
+
+destination
+path
+movement
+collision
+
+If navigation meshes/maps significantly complicate the current simple world, use a simpler movement implementation.
+
+Do not overengineer navigation.
+
+---
+
+# 14. GATHER
+
+Example AI decision:
+
+{
+    "action": "gather",
+    "target_id": "berry_bush_4"
+}
+
+Godot validates:
+
+target exists
+target is BerryBush
+target has gather affordance
+target is within interaction distance
+berries_available > 0
+
+If too far away:
+
+either:
+
+A. move toward target and then execute
+
+OR
+
+B. return action failure requiring movement
+
+Prefer whichever fits the existing action architecture cleanly.
+
+Do not teleport agents.
+
+On success:
+
+berry_bush berries_available -= 1
+
+agent inventory berry += 1
+
+Emit event:
+
+{
+    "type": "resource_gathered",
+    "actor_id": "alice",
+    "target_id": "berry_bush_4",
+    "item": "berry",
+    "quantity": 1
+}
+
+---
+
+# 15. EAT
+
+Agent may eat berries from inventory.
+
+Decision:
+
+{
+    "action": "eat",
+    "parameters": {
+        "item": "berry",
+        "quantity": 1
+    }
+}
+
+Godot validates inventory.
+
+On success:
+
+remove berry
+reduce hunger
+
+Example:
+
+hunger = max(0, hunger - 25)
+
+Values should be configurable.
+
+Emit action result/event.
+
+---
+
+# 16. DRINK
+
+Agent may drink from a visible/reachable WaterSource.
+
+Decision:
+
+{
+    "action": "drink",
+    "target_id": "water_1"
+}
+
+Godot validates target and distance.
+
+On success:
+
+reduce thirst substantially.
+
+Example:
+
+thirst = max(0, thirst - 50)
+
+Water does not deplete in V7.
+
+---
+
+# 17. REST
+
+Implement simple REST.
+
+Agent stops moving for a period.
+
+Energy gradually increases.
+
+Rest can be interrupted by:
+
+important event
+direct message
+critical need
+
+Do NOT implement beds/shelters yet.
+
+---
+
+# 18. GIVE
+
+Implement resource sharing.
+
+Example:
+
+Alice has:
+
+berry = 3
+
+Alice sees Bob.
+
+AI:
+
+{
+    "action": "give",
+    "target_id": "bob",
+    "parameters": {
+        "item": "berry",
+        "quantity": 1
+    }
+}
+
+Godot validates:
+
+Alice has item
+Bob exists
+Bob is close enough
+quantity valid
+
+On success:
+
+Alice berry -1
+Bob berry +1
+
+Emit:
+
+resource_given
+
+Relationship effects:
+
+Receiver trust/affinity toward giver should increase modestly.
+
+Example:
+
+trust +5
+affinity +3
+
+Keep configurable.
+
+This action is particularly important for social experiments.
+
+---
+
+# 19. ACTION RESULTS
+
+Every meaningful action should produce a structured result.
+
+Example success:
+
+{
+    "success": true,
+    "action": "gather",
+    "target_id": "berry_bush_4",
+    "result": "berry_collected"
+}
+
+Failure:
+
+{
+    "success": false,
+    "action": "gather",
+    "target_id": "berry_bush_4",
+    "reason": "resource_empty"
+}
+
+Agents should be able to remember important failures.
+
+Example:
+
+"I returned to the berry bush, but it was empty."
+
+Do not create high-importance memory for every trivial movement failure.
+
+---
+
+# 20. GOALS
+
+Support simple survival goals.
 
 Examples:
 
 find_food
-socialize
-explore
+find_water
 rest
+explore
+socialize
+help_agent
 idle
 
-The goal is NOT a complicated planner.
+The AI may choose/update goals.
 
-The AI may choose/update a high-level goal when making decisions.
+Needs should strongly influence reasonable goals.
 
-Example structured response:
+Example:
 
-{
-"agent_id": "alice",
-"goal": "socialize",
-"action": "talk",
-"target_id": "bob",
-"message": "Bob, why did you take the only apple?",
-"reason": "Bob took the only available food while I was hungry."
-}
+hunger = 95
 
-Store current_goal on the agent.
+The prompt should make clear that severe hunger is urgent.
 
-Display it in the UI/debug information.
+But do NOT deterministically force the AI to always choose food.
+
+Personality and context may influence decisions.
 
 ---
 
-## V4 — REAL AGENT-TO-AGENT CONVERSATION
+# 21. KNOWN RESOURCE NAVIGATION
 
-Replace the current repeated generic TALK behavior with actual contextual conversations.
+If an agent remembers a resource location, the AI may choose to seek it.
 
-When Agent A talks to Agent B:
+Avoid requiring the LLM to output raw coordinates.
 
-1. Agent A decides to TALK.
-2. Agent A produces a message.
-3. Godot delivers the message to Agent B.
-4. Agent B receives the message as an event/perception.
-5. Agent B may respond during its next decision.
-6. Both agents remember the conversation.
+Preferred decision:
+
+{
+    "goal": "find_food",
+    "action": "go_to_known",
+    "target_id": "berry_bush_4"
+}
+
+If necessary add:
+
+go_to_known
+
+as a navigation action.
+
+Godot resolves the remembered target location from the agent's subjective known_locations.
+
+IMPORTANT:
+
+Use the AGENT'S remembered location.
+
+Do not secretly use current world position if the agent has stale knowledge.
+
+This preserves subjective knowledge.
+
+---
+
+# 22. COMMUNICATION ABOUT RESOURCES
+
+Do not implement a formal knowledge-transfer system yet.
+
+However, normal TALK should allow agents to mention discovered resources.
 
 Example:
 
 Alice:
-"Bob, why did you take the only apple?"
+"I found berries north of here."
 
-Bob receives:
+Bob may remember that statement as a conversation memory.
 
-{
-"type": "message",
-"from": "alice",
-"message": "Bob, why did you take the only apple?"
-}
+Do NOT automatically insert Alice's exact berry location into Bob's known_locations simply because she said it.
 
-Bob may respond:
+For V7, Bob can remember the claim in natural-language memory.
 
-"I was starving. I saw it first."
-
-Alice later receives that response.
-
-Do NOT create an infinite immediate conversation loop.
-
-Messages should enter the normal agent perception/decision cycle.
-
-An agent may choose:
-
-talk
-wander
-wait
-
-instead of answering.
-
-The LLM should decide whether responding is appropriate.
+Formal knowledge transfer can come later.
 
 ---
 
-## CONVERSATION CONTEXT
+# 23. DECISION CONTEXT
 
-When asking the LLM to make a decision, include recent relevant conversation.
+The AI should receive concise context.
 
-Example:
+Conceptually:
 
-Recent conversation with Bob:
+SELF
 
-Alice: "Why did you take the apple?"
-Bob: "I was starving."
-Alice: "You could have asked me."
+Alice
 
-Do not send unlimited conversation history.
+Needs:
+Hunger: 78
+Thirst: 35
+Energy: 70
 
-Use a configurable limit such as the most recent 5–10 relevant messages/events.
+Inventory:
+Berry: 0
 
----
+Personality:
+...
 
-## ANTI-REPETITION
-
-Solve the current behavior where agents repeatedly say:
-
-"Hello Bob. What should we do next?"
-
-The prompt should explicitly tell agents:
-
-* avoid repeating the same message
-* consider what was already discussed
-* do not greet the same nearby person every decision cycle
-* TALK only when there is a reason to communicate
-* WAIT or WANDER are valid choices
-* conversations should react to recent events
-
-Implement a small deterministic repetition guard as well.
-
-For example:
-
-If an agent generates exactly the same message to the same target within a recent time window, reject it or convert the action to WAIT.
-
-Do not rely exclusively on prompting.
+Goal:
+find_food
 
 ---
 
-## V5 — MEMORY
+CURRENT PERCEPTION
 
-Create persistent short/medium-term memory for each agent.
+berry_bush_4
+distance: 50
+affordances: gather
 
-Do NOT use a vector database.
-
-For now use an in-memory list/array.
-
-Memory object:
-
-{
-"id": "...",
-"timestamp": "...",
-"type": "event",
-"description": "Bob took the only apple while Alice was hungry.",
-"importance": 8,
-"related_agents": ["bob"],
-"created_at_tick": 123
-}
-
-Possible memory types:
-
-event
-conversation
-observation
-relationship
-action
-
-Importance:
-
-1–10
-
-Examples:
-
-Low importance:
-
-"I saw Bob walking nearby."
-
-importance = 2
-
-Medium:
-
-"Bob told me he was hungry."
-
-importance = 5
-
-High:
-
-"Bob took the only apple while I was starving."
-
-importance = 8
-
-For now importance may be assigned using simple deterministic rules.
-
-Do not make another LLM request merely to score every memory.
+Bob
+distance: 80
+affordances: talk, give
 
 ---
 
-## MEMORY CREATION
+KNOWN LOCATIONS
 
-Agents should remember meaningful events.
+water_1
+last seen 40 ticks ago
+remembered direction/distance or location abstraction
 
-Examples:
-
-Agent sees another agent take scarce food:
-
-"Bob took the only apple."
-
-Agent receives message:
-
-"Bob told me he took the apple because he was starving."
-
-Agent performs action:
-
-"I asked Bob why he took the apple."
-
-Do not store every frame or every trivial observation.
-
-Avoid memory spam.
+berry_bush_2
+last seen 100 ticks ago
 
 ---
 
-## MEMORY RETRIEVAL
+RELEVANT MEMORIES
 
-Before requesting an AI decision, select relevant memories.
-
-Keep this simple.
-
-Score memories based on:
-
-* importance
-* recency
-* whether currently visible agents appear in related_agents
-
-Something conceptually like:
-
-score =
-importance_weight
-
-* recency_weight
-* relationship_relevance
-
-Send only the top N memories.
-
-For example:
-
-N = 8
-
-Prompt:
-
-Relevant memories:
-
-* Bob took the only apple while I was hungry.
-* Bob told me he was starving.
-* I previously asked Bob why he did not share.
-
-This gives the agent continuity.
+- Bob took scarce food earlier.
+- I found water near the southern area.
 
 ---
 
-## MEMORY LIMIT
-
-Prevent unlimited memory growth.
-
-Use a configurable maximum, for example:
-
-MAX_MEMORIES = 100
-
-When exceeded, remove low-importance old memories first.
-
-Keep implementation simple.
-
-Do not implement semantic embeddings yet.
-
----
-
-## OPTIONAL SIMPLE REFLECTION
-
-Implement a lightweight reflection mechanism only if it can remain simple.
-
-Do NOT make frequent extra LLM calls.
-
-For example, after several important events, an agent may store a derived memory such as:
-
-"Bob tends to prioritize himself when resources are scarce."
-
-However:
-
-Prefer deterministic relationship updates over expensive reflection calls for V6.
-
-If reflection significantly complicates the architecture, leave a clean extension point and document it instead of implementing it.
-
----
-
-## V6 — PERSONALITY
-
-Personality must influence decisions.
-
-Use personality traits such as:
-
-friendliness
-cooperation
-curiosity
-selfishness
-aggression
-
-Values:
-
-0.0–1.0
-
-Include personality in the AI prompt.
-
-Explain the traits behaviorally.
-
-Example:
-
-High cooperation:
-You tend to share resources and seek mutually beneficial solutions.
-
-High selfishness:
-You prioritize your own needs when resources are scarce.
-
-High curiosity:
-You prefer exploring and interacting with unfamiliar things.
-
-High aggression:
-You are more willing to confront others.
-
-Do not tell the model to mechanically obey personality numbers.
-
-Tell it to treat them as behavioral tendencies.
-
-Personality should remain stable during this version.
-
----
-
-## V6 — RELATIONSHIPS
-
-Each agent should maintain its OWN relationship state toward other agents.
-
-Relationship must NOT automatically be symmetric.
-
-Alice may trust Bob 20/100.
-
-Bob may trust Alice 70/100.
-
-Use:
-
-trust: -100 to +100
-affinity: -100 to +100
-
-Optional:
-
-respect: -100 to +100
-
-Start neutral or with configurable initial values.
-
-Example:
-
-Alice → Bob
-
-{
-"trust": 0,
-"affinity": 10
-}
-
-Bob → Alice
-
-{
-"trust": 0,
-"affinity": 0
-}
-
----
-
-## RELATIONSHIP EVENTS
-
-Update relationships deterministically when meaningful events occur.
-
-Examples:
-
-Agent shares food:
-
-trust +10
-affinity +5
-
-Agent takes scarce food while another hungry agent is present:
-
-other agent's trust toward actor -15
-affinity -5
-
-Agent gives useful information:
-
-trust +5
-
-Agent insults another:
-
-affinity -10
-
-Agent lies:
-
-Do NOT attempt complex lie detection yet.
-
-Agent repeatedly behaves cooperatively:
-
-trust gradually increases.
-
-Clamp values:
-
--100 <= relationship <= 100
-
----
-
-## RELATIONSHIP → AI
-
-Include relationships in AI decision context.
-
-Example:
-
-Relationships:
+RELATIONSHIPS
 
 Bob:
 trust: -15
 affinity: -5
 
-Relevant memories:
+---
 
-* Bob took the only apple while I was hungry.
+AVAILABLE HIGH-LEVEL ACTIONS
 
-Recent conversation:
+gather
+eat
+drink
+give
+talk
+explore
+wander
+rest
+wait
+go_to_known
 
-Bob: "I was starving."
+Keep prompts concise.
 
-The model should use these naturally when deciding what to do or say.
+Do not send all memories or all known locations.
+
+Select relevant/recent ones.
 
 ---
 
-## SOCIAL EVENT SYSTEM
+# 24. DECISION TRIGGERS
 
-Create a simple event mechanism so world events can be observed by relevant agents.
+Preserve V6.5 event-driven decisions.
 
-Example event:
+Do NOT return to querying AI every 5 seconds unconditionally.
 
-{
-"type": "resource_taken",
-"actor_id": "bob",
-"target_id": "apple_1",
-"description": "Bob took Apple.",
-"position": {...}
-}
+Request a new AI decision when appropriate:
 
-Nearby agents can receive the event.
+current action completes
+important resource discovered
+resource becomes unavailable
+direct message received
+hunger threshold crossed
+thirst threshold crossed
+energy threshold crossed
+action fails
+goal completes
+maximum decision timeout reached
 
-This allows Alice to know:
-
-Bob took Apple.
-
-rather than merely discovering later that:
-
-Apple no longer exists.
-
-Events should support future world development.
-
-Potential future events:
-
-resource_taken
-resource_given
-message
-agent_arrived
-agent_left
-attack
-death
-construction
-discovery
-
-Do NOT implement all of these.
-
-Design the event structure so they can be added later.
-
-For this version implement only what current actions need.
-
----
-
-## AGENT DECISION INPUT
-
-By V6, the AI backend should receive something conceptually like:
-
-{
-"id": "alice",
-"name": "Alice",
-
-```
-"needs": {
-    "hunger": 80,
-    "energy": 90
-},
-
-"personality": {
-    "friendliness": 0.9,
-    "cooperation": 0.9,
-    "curiosity": 0.8,
-    "selfishness": 0.1,
-    "aggression": 0.1
-},
-
-"current_goal": "find_food",
-
-"visible_entities": [
-    {
-        "type": "agent",
-        "id": "bob",
-        "name": "Bob"
-    }
-],
-
-"relationships": {
-    "bob": {
-        "trust": -15,
-        "affinity": -5
-    }
-},
-
-"recent_events": [
-    "Bob took Apple."
-],
-
-"relevant_memories": [
-    {
-        "description": "Bob took the only apple while I was hungry.",
-        "importance": 8
-    }
-],
-
-"recent_messages": [
-    {
-        "from": "bob",
-        "message": "I was starving."
-    }
-],
-
-"available_actions": [
-    "talk",
-    "wander",
-    "wait"
-]
-```
-
-}
-
-Do not necessarily copy this exact schema if the current architecture already has a cleaner compatible structure.
-
-Preserve working code where possible.
-
----
-
-## AGENT DECISION OUTPUT
-
-Use structured output.
+Log trigger reason.
 
 Example:
 
-{
-"agent_id": "alice",
-"goal": "socialize",
-"action": "talk",
-"target_id": "bob",
-"message": "I understand you were hungry, but taking the only food without discussing it makes it difficult for me to trust you.",
-"reason": "Bob took the scarce food and my trust in him has decreased."
-}
+Alice decision requested: HUNGER_THRESHOLD
 
-Possible actions remain:
+Bob decision requested: RESOURCE_DISCOVERED
 
-take_apple
-talk
-wander
-wait
-
-Do NOT expand world actions yet.
+Charlie decision requested: ACTION_COMPLETE
 
 ---
 
-## FAKE PROVIDER MUST STILL WORK
+# 25. RESOURCE DISCOVERY
 
-Maintain AI_PROVIDER=fake.
+When an agent sees a resource for the first time:
 
-Update fake behavior enough to exercise:
+create/update known location
 
-* memory
-* conversations
-* relationships
-* anti-repetition
+optionally create a memory
 
-Fake mode does not need sophisticated human behavior.
+Example:
 
-Its purpose is integration testing.
+Alice discovered BerryBush.
 
-OpenAI mode should produce the interesting behavior.
+Memory:
+
+"I found a berry bush."
+
+Importance should depend on current needs.
+
+If Alice is starving:
+
+importance high.
+
+If Alice is full:
+
+importance lower.
+
+Use deterministic rules where possible.
+
+Do NOT call another LLM for scoring.
 
 ---
 
-## OBSERVABILITY / UI
+# 26. SIMPLE WORLD CONFIGURATION
 
-Improve the debug UI enough that I can inspect what is happening.
+Make world parameters easy to change.
 
-When clicking/selecting an agent, or through a simple panel, show:
+Prefer a centralized configuration/resource/constants file for things such as:
+
+perception radius
+interaction distance
+hunger rate
+thirst rate
+energy rate
+berry nutrition
+water hydration
+berry bush capacity
+berry regeneration
+rest recovery
+decision timeout
+map bounds
+
+Avoid scattering magic numbers across scripts.
+
+---
+
+# 27. DEBUG / OBSERVABILITY UI
+
+Update the agent inspection panel.
+
+When selecting an agent show:
 
 Name
 
@@ -747,296 +1145,467 @@ Current goal
 Current action
 
 Hunger
-
+Thirst
 Energy
+
+Inventory
 
 Personality
 
 Relationships
 
+Visible entities
+
+Known locations
+
 Recent memories
 
-Recent messages
+Pending messages
 
-AI reason
+Last AI decision reason
 
 Example:
 
 ALICE
 
 Goal:
-Socialize
+Find Food
 
 Action:
-Talk to Bob
+Explore
 
 Hunger:
-80
+82
 
-Personality:
-Friendly: 0.9
-Cooperative: 0.9
-Selfish: 0.1
+Thirst:
+34
 
-Relationship with Bob:
+Energy:
+71
+
+Inventory:
+Berry x0
+
+Visible:
+Tree
+Bob
+
+Known Locations:
+BerryBush #4 — last seen tick 300
+Water #1 — last seen tick 180
+
+Relationship:
+Bob
 Trust: -15
-Affinity: -5
 
-Relevant memories:
-
-* Bob took the only apple.
-* Bob said he was starving.
-
-Last AI reasoning:
-"I want to confront Bob about taking the food."
-
-Keep the UI functional and simple.
-
-Do not spend significant effort on visual design.
+Memory:
+"Bob took scarce food."
+"I found water south of here."
 
 ---
 
-## EVENT LOG
+# 28. WORLD EVENT LOG
 
-Improve the world log.
-
-Example desired behavior:
-
-[08:40:01] World ready.
-[08:40:06] Bob observes Alice and Apple.
-[08:40:06] Bob decided TAKE_APPLE.
-[08:40:07] Bob took Apple.
-[08:40:07] Alice observed: Bob took Apple.
-[08:40:07] Alice memory created: "Bob took the only apple."
-[08:40:07] Alice → Bob trust: 0 → -15
-[08:40:11] Alice decided TALK.
-[08:40:11] Alice → Bob: "Why did you take the only apple?"
-[08:40:16] Bob remembered Alice's question.
-[08:40:16] Bob decided TALK.
-[08:40:16] Bob → Alice: "I was starving. I saw it first."
-[08:40:21] Alice decided WANDER.
-
-The important improvement is:
-
-DO NOT produce:
-
-Hello Bob.
-Hello Alice.
-Hello Bob.
-Hello Alice.
-
-forever.
-
----
-
-## IMPORTANT: AI REASONING PRIVACY / DEBUGGING
-
-Do not request hidden chain-of-thought from the model.
-
-The `reason` field should be a short decision explanation only.
+Produce useful logs.
 
 Example:
 
-"Bob took the scarce food, so Alice wants to confront him."
+[10:01:00] Alice decision requested: ACTION_COMPLETE
+[10:01:01] Alice decided EXPLORE (find_food)
+[10:01:08] Alice discovered BerryBush berry_bush_4
+[10:01:08] Alice memory created: I found a berry bush.
+[10:01:08] Alice decision requested: RESOURCE_DISCOVERED
+[10:01:09] Alice decided GATHER target=berry_bush_4
+[10:01:11] Alice gathered 1 Berry.
+[10:01:11] Alice inventory Berry: 0 → 1
+[10:01:12] Alice decided EAT.
+[10:01:12] Alice ate Berry.
+[10:01:12] Alice hunger: 82 → 57
 
-Do not ask the model to reveal detailed internal reasoning.
+Meanwhile:
 
----
+[10:01:05] Bob discovered WaterSource water_1
+[10:01:06] Bob drank water.
+[10:01:06] Bob thirst: 72 → 22
 
-## TOKEN / COST CONTROL
-
-Keep AI calls efficient.
-
-Do NOT send:
-
-* complete world state
-* every historical memory
-* every previous conversation
-* huge system prompts on every possible game mechanic
-
-Send only information relevant to that agent.
-
-Target:
-
-roughly 5–10 relevant memories/events/messages maximum.
-
-Maintain configurable decision interval.
-
-Do not query every frame.
+This log is extremely important for evaluating emergent behavior.
 
 ---
 
-## PERSISTENCE
+# 29. FAKE PROVIDER
 
-For V6:
+Update fake AI provider so the survival world can be tested without OpenAI.
 
-Memory and relationships only need to persist while the simulation is running.
+Example deterministic priorities:
 
-If the existing project already has simple save/load functionality, it is acceptable to extend it.
+critical thirst + visible water:
+drink
 
-Otherwise DO NOT introduce a database.
+critical hunger + berry inventory:
+eat
 
-Long-term persistence comes later.
+critical hunger + visible berry bush:
+gather
 
----
+critical thirst + known water:
+go_to_known
 
-## TEST SCENARIO
+critical hunger + known berry bush:
+go_to_known
 
-Keep the one-apple scenario specifically because it is a useful social experiment.
+otherwise:
+explore
 
-Alice:
+Occasionally allow talk/give for testing.
 
-friendly = 0.9
-cooperation = 0.9
-curiosity = 0.8
-selfishness = 0.1
-aggression = 0.1
-
-Bob:
-
-friendly = 0.3
-cooperation = 0.2
-curiosity = 0.5
-selfishness = 0.8
-aggression = 0.4
-
-Both hungry.
-
-One apple.
-
-Run the simulation.
-
-We want to observe whether:
-
-1. One agent takes the apple.
-2. The other observes the event.
-3. A memory is created.
-4. Relationship values change.
-5. Future decisions receive that memory.
-6. Conversation references what actually happened.
-7. The conversation does not endlessly repeat.
-8. Agents eventually choose other actions.
+The fake provider is for integration testing, not realistic behavior.
 
 ---
 
-## SECOND TEST SCENARIO
+# 30. OPENAI PROVIDER
 
-Make it easy to spawn a third agent:
+Preserve the current OpenAI integration.
 
-Charlie
+Use structured output.
 
-Do not necessarily enable Charlie in the default world.
+The model must only select actions supplied by the system.
 
-But verify the architecture does not assume exactly two agents.
+It must never invent:
 
-Charlie should be able to:
+resources
+items
+locations
+agents
+actions
 
-* perceive Alice/Bob
-* maintain separate relationships
-* remember events
-* talk
-* make independent decisions
+Prompt should explicitly state:
+
+You only know what appears in your perception, memories, known locations, conversations, and current state.
+
+You do NOT know the complete world.
+
+Do not assume unseen resources exist.
+
+You may explore to discover new things.
 
 ---
 
-## ARCHITECTURAL PRINCIPLE
+# 31. SURVIVAL CONSEQUENCES
 
-Maintain strict separation:
+For V7 do NOT implement death yet unless the current architecture makes it trivial.
 
-# WORLD TRUTH
+At critical hunger/thirst/energy:
 
-Godot
-
-# AGENT SUBJECTIVE STATE
-
-memories + relationships + personality
-
-# DECISION
-
-AI backend
-
-# EXECUTION
-
-Godot
+log clearly that the agent is in critical condition.
 
 Example:
 
-Bob believes:
-"Maybe Alice has food."
+Alice is critically thirsty.
 
-This does NOT create food.
+Death will be introduced later.
 
-Only Godot world state determines whether food exists.
-
-Similarly, memories can be incomplete or subjective.
-
-World state remains authoritative.
+The purpose of V7 is behavior testing, not population simulation yet.
 
 ---
 
-## DO NOT BUILD WORLD V7 YET
+# 32. DO NOT IMPLEMENT YET
 
-Stop after completing V6.
+Do NOT add:
 
-Do not add:
-
-forest
-trees
-water
-rocks
-animals
+tree cutting
+wood
+mining
+stone inventory
 tools
+axes
 crafting
 buildings
-weather
-day/night
+shelters
+fire
+cooking
+hunting
+animals
 combat
 farming
-skills
-knowledge
+weather
+seasons
+day/night
+disease
+death
+reproduction
+children
+generations
 economy
+currency
+jobs
+government
+factions
+formal knowledge transfer
+technology tree
+skill learning
+PostgreSQL
+vector database
+embeddings
+RAG
+LangChain
+procedural generation
 
-Those will be the next development phase.
+Those belong to later versions.
 
 ---
 
-## BEFORE FINISHING
+# 33. TEST SCENARIO
 
-Run/test as much as the environment allows.
+Create a default survival test world.
+
+Agents:
+
+Alice
+Bob
+Charlie
+
+Use their existing personalities and relationships.
+
+Place them relatively close together initially.
+
+Place resources so agents must explore.
+
+For example:
+
+START AREA
+
+Alice
+Bob
+Charlie
+
+No immediately visible food/water for everyone.
+
+Elsewhere:
+
+2–4 berry bushes
+
+1–2 water sources
+
+several trees
+
+several rocks
+
+Make at least some resources outside initial perception radius.
+
+The expected behavior is:
+
+Agents start with needs.
+
+↓
+They explore.
+
+↓
+Different agents discover different resources.
+
+↓
+Their personal known_locations diverge.
+
+↓
+Hungry agents seek berries.
+
+↓
+Thirsty agents seek water.
+
+↓
+Agents gather/eat/drink.
+
+↓
+Agents may talk.
+
+↓
+Agents may share berries depending on AI/personality.
+
+This is the first real survival experiment.
+
+---
+
+# 34. IMPORTANT TEST: NO OMNISCIENCE
+
+Explicitly test:
+
+Alice has discovered berry_bush_1.
+
+Bob has NOT discovered berry_bush_1.
 
 Verify:
 
-* Python syntax
-* FastAPI health endpoint
-* fake provider decisions
-* structured schemas
-* Godot scripts if Godot is available
-* no obvious null-reference errors
-* no hardcoded Alice/Bob assumptions
-* AI failure falls back safely
-* repeated messages are prevented
-* relationship values remain within bounds
-* memory limit works
+Alice AI context contains berry_bush_1.
 
-Do not delete working functionality from the existing V1 implementation unnecessarily.
+Bob AI context DOES NOT contain berry_bush_1.
 
-Refactor incrementally.
+Bob must discover it himself or learn about it socially in a future system.
+
+This is a critical requirement.
 
 ---
 
-AFTER IMPLEMENTATION
+# 35. IMPORTANT TEST: STALE KNOWLEDGE
 
-Give me:
+Test:
 
-1. Short explanation of what changed from the previous version.
-2. Updated project tree.
-3. Important files/classes and their responsibilities.
-4. Exact Windows commands to run the backend.
-5. How to switch between fake and OpenAI.
-6. How memory works.
-7. How relationship updates work.
-8. How conversations work.
-9. How to add Charlie.
-10. What I should manually test in Godot.
-11. Known limitations.
-12. STOP THERE. Do not implement world/survival features yet.
+Alice discovers berry_bush_1.
+
+Alice leaves.
+
+Bob empties berry_bush_1.
+
+Alice still remembers its last known location.
+
+Alice returns expecting berries.
+
+Alice observes:
+
+berries_available = 0
+
+Alice updates her knowledge/memory.
+
+This behavior is desirable.
+
+Agents' beliefs do not automatically synchronize with world truth.
+
+---
+
+# 36. IMPORTANT TEST: RESOURCE SHARING
+
+Test:
+
+Alice has 3 berries.
+
+Bob has 0 berries and is hungry.
+
+Alice sees Bob.
+
+Verify that the AI is technically capable of choosing:
+
+{
+    "action": "give",
+    "target_id": "bob",
+    "parameters": {
+        "item": "berry",
+        "quantity": 1
+    }
+}
+
+Godot validates and transfers the item.
+
+Bob's relationship toward Alice improves.
+
+Do NOT force Alice to share.
+
+Her AI/personality should determine whether she does.
+
+---
+
+# 37. CODE QUALITY
+
+Keep this implementation understandable.
+
+Prefer components/classes around concepts such as:
+
+Agent
+World
+WorldEntity
+BerryBush
+WaterSource
+Inventory
+Needs
+Perception
+KnownLocation
+ActionExecutor
+WorldEvent
+
+But adapt to the existing architecture rather than performing a huge rewrite.
+
+Avoid giant classes.
+
+Avoid premature generic frameworks.
+
+Comment important architecture decisions.
+
+---
+
+# SUCCESS CRITERIA
+
+V7 is successful when:
+
+1. Alice, Bob, and Charlie live in a larger world.
+
+2. Hunger, thirst, and energy change over simulation time.
+
+3. Agents only perceive nearby entities.
+
+4. Agents do NOT know the complete map.
+
+5. Agents can explore.
+
+6. Different agents discover different resources.
+
+7. Resource discoveries become personal known locations.
+
+8. Agents can gather berries.
+
+9. Berries enter inventory.
+
+10. Agents can eat berries.
+
+11. Eating reduces hunger.
+
+12. Agents can find/drink water.
+
+13. Drinking reduces thirst.
+
+14. Agents can rest.
+
+15. Agents can give berries to another agent.
+
+16. Giving physically transfers inventory.
+
+17. Relationships react to sharing.
+
+18. Agents can remember resource locations.
+
+19. Knowledge may become stale.
+
+20. World remains authoritative.
+
+21. LLM outputs generic high-level actions rather than movement commands.
+
+22. AI calls are event-driven rather than frame-driven.
+
+23. Fake provider still works.
+
+24. OpenAI provider still works.
+
+25. The debug UI lets me inspect individual agent knowledge.
+
+---
+
+# AFTER IMPLEMENTATION
+
+Do NOT immediately implement V8.
+
+Instead provide:
+
+1. Updated project architecture.
+2. New files/classes.
+3. Explanation of the affordance system.
+4. Explanation of perception.
+5. Explanation of known locations.
+6. Explanation of stale knowledge.
+7. Explanation of inventory.
+8. Explanation of survival needs.
+9. Explanation of generic actions.
+10. Explanation of how EXPLORE works.
+11. Explanation of how GIVE works.
+12. Exact Windows commands to run.
+13. How to test with fake AI.
+14. How to test with OpenAI.
+15. A suggested 5–10 minute manual simulation test.
+16. Known limitations.
+17. STOP. Do not implement V8.
+```
