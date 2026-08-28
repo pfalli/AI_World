@@ -3,7 +3,7 @@ set -e
 
 cd /opt/AI_World
 
-if [ ! -f server/.env ]; then
+if [ ! -f ../server/.env ]; then
     echo "ERROR: /opt/AI_World/server/.env does not exist."
     exit 1
 fi
