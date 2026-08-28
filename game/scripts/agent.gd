@@ -20,6 +20,9 @@ enum ActionState { IDLE, APPROACHING_TARGET, EXECUTING, COMPLETED, FAILED }
 var current_action := "wait"
 var current_goal := "idle"
 var action_state := ActionState.IDLE
+var _action_sequence := 0
+var _active_action_id := 0
+var _active_action_name := ""
 var relationships: Dictionary = {}
 var inventory: Dictionary = {"berry": 0}
 var known_locations: Dictionary = {}
@@ -92,13 +95,15 @@ func _on_decision_received(decision: Dictionary) -> void:
 	last_decision_tick = _world.world_tick
 	_important_event = false
 	_action_complete = false
+	# Long-running rest/talk actions end before the next committed intent starts.
+	if _active_action_id != 0: mark_action_completed()
 	for pending in pending_messages: pending.pending = false
 	var action := str(decision.get("action", "wait"))
 	current_goal = str(decision.get("goal", "idle"))
 	if not ACTIONS.has(action): action = "wait"
 	if not GOALS.has(current_goal): current_goal = "idle"
 	last_reason = str(decision.get("reason", "No reason provided."))
-	action_state = ActionState.EXECUTING
+	start_action(action)
 	_world.log_event("%s decision %s target=%s" % [agent_name, action.to_upper(), str(decision.get("target_id", ""))])
 	_world.execute_intent(self, action, str(decision.get("target_id", "")), str(decision.get("message", "")), decision.get("parameters", {}))
 	pending_messages.clear()
@@ -180,7 +185,18 @@ func set_talk_target(target: WorldAgent, message: String) -> void:
 	current_action = "talk"; _destination = target.global_position; _action_complete = false; update_status("To %s: %s" % [target.agent_name, message])
 
 func wait_safely() -> void:
-	current_action = "wait"; velocity = Vector2.ZERO; action_state = ActionState.IDLE; _action_complete = false; update_status("Waiting — %s" % current_goal)
+	velocity = Vector2.ZERO
+	if _active_action_id != 0: mark_action_completed()
+	else: current_action = "wait"; action_state = ActionState.IDLE; _action_complete = false; update_status("Waiting — %s" % current_goal)
+
+func start_action(action: String) -> void:
+	_action_sequence += 1
+	_active_action_id = _action_sequence
+	_active_action_name = action
+	current_action = action
+	action_state = ActionState.EXECUTING
+	_action_complete = false
+	_world.log_event("%s ACTION #%s %s started" % [agent_name, _active_action_id, action.to_upper()])
 
 func begin_approach(intent: Dictionary, destination: Vector2, target_name: String) -> void:
 	_pending_intent = intent; _destination = destination; current_action = str(intent.action); action_state = ActionState.APPROACHING_TARGET; _action_complete = false
@@ -191,12 +207,20 @@ func take_pending_intent() -> Dictionary:
 	var intent := _pending_intent; _pending_intent = {}; return intent
 
 func mark_action_completed() -> void:
-	action_state = ActionState.COMPLETED; _action_complete = true; _pending_intent = {}
-	_world.log_event("%s action completed" % agent_name)
+	if _active_action_id == 0 or action_state == ActionState.COMPLETED or action_state == ActionState.IDLE: return
+	var finished_id := _active_action_id
+	var finished_name := _active_action_name
+	action_state = ActionState.COMPLETED; _action_complete = true; _pending_intent = {}; _destination = global_position
+	_active_action_id = 0; _active_action_name = ""; current_action = "wait"; velocity = Vector2.ZERO
+	_world.log_event("%s ACTION #%s %s completed" % [agent_name, finished_id, finished_name.to_upper()])
 
 func mark_action_failed(reason: String) -> void:
-	action_state = ActionState.FAILED; _action_complete = true; _pending_intent = {}
-	_world.log_event("%s action failed: %s" % [agent_name, reason])
+	if _active_action_id == 0 or action_state == ActionState.FAILED or action_state == ActionState.IDLE: return
+	var failed_id := _active_action_id
+	var failed_name := _active_action_name
+	action_state = ActionState.FAILED; _action_complete = true; _pending_intent = {}; _destination = global_position
+	_active_action_id = 0; _active_action_name = ""; current_action = "wait"; velocity = Vector2.ZERO
+	_world.log_event("%s ACTION #%s %s failed: %s" % [agent_name, failed_id, failed_name.to_upper(), reason])
 
 func update_status(text: String) -> void:
 	$NameLabel.text = "%s  (H:%s E:%s)" % [agent_name, hunger, energy]

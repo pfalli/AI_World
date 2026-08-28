@@ -90,6 +90,12 @@ Each agent now keeps its own:
 - Replaced continuous urgent-need checks with threshold-crossing triggers and re-arm hysteresis after recovery.
 - Added AI request counters and approach/arrival/completion logs for simulation debugging.
 
+## 2026-08-28 — V7.2: Action lifecycle correctness
+
+- Added unique per-agent action IDs and idempotent completion/failure transitions.
+- Completing or failing an action now clears its active ID, destination, pending intent, movement velocity, and current action before emitting exactly one lifecycle log.
+- Movement arrival cannot re-complete an explore/wander action on subsequent physics frames; long-running rest/talk actions are completed once before their next decision starts.
+
 ## Deliberately deferred
 
 The project still intentionally excludes survival-world features and persistence infrastructure: crafting, economy, combat, animals, buildings, databases, embeddings, vector search, RAG, planners, and long-term save/load.
