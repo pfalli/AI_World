@@ -1,7 +1,9 @@
 class_name WorldConfig
 extends RefCounted
 
-const MAP_BOUNDS := Rect2(40, 80, 1800, 1000)
+# The visual forest is a fixed 60 x 40 map of 16px tiles (960 x 640).
+# Insets keep an agent's body within the terrain rather than half outside its edge.
+const MAP_BOUNDS := Rect2(24, 24, 912, 592)
 const PERCEPTION_RADIUS := 250.0
 const INTERACTION_DISTANCE := 58.0
 const HUNGER_PER_TICK := 1

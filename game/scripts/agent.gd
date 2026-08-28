@@ -69,6 +69,11 @@ func _physics_process(_delta: float) -> void:
 			if action_state == ActionState.APPROACHING_TARGET: _world.arrived_at_target(self)
 			elif current_action == "wander": mark_action_completed()
 		move_and_slide()
+		# Destinations remain simulation-owned; this is a final world-edge guard only.
+		global_position = Vector2(
+			clampf(global_position.x, WorldConfig.MAP_BOUNDS.position.x, WorldConfig.MAP_BOUNDS.end.x),
+			clampf(global_position.y, WorldConfig.MAP_BOUNDS.position.y, WorldConfig.MAP_BOUNDS.end.y)
+		)
 	_update_animation()
 
 func _setup_visuals() -> void:
