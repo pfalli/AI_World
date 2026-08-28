@@ -1,6 +1,6 @@
 extends Node2D
 
-@export var server_url := "http://127.0.0.1:8000"
+var server_url := ""
 @export var perception_radius := WorldConfig.PERCEPTION_RADIUS
 var environment_entities: Dictionary = {}
 var world_tick := 0
@@ -24,12 +24,15 @@ const WATER_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture o
 const TREE_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/trees.png")
 const BUSH_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/bushes.png")
 const STONE_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/stones.png")
+const API_CONFIG := preload("res://scripts/api_config.gd")
 
 func _ready() -> void:
 	randomize()
+	server_url = API_CONFIG.base_url()
 	_build_visual_world()
 	_build_resource_visuals()
 	_open_simulation_logs()
+	log_event("API base URL: %s" % server_url)
 	_register_environment()
 	for agent: WorldAgent in agents.get_children():
 		agent.setup(self, server_url)

@@ -4,7 +4,7 @@ extends Node
 signal decision_received(decision: Dictionary)
 signal request_failed(error_text: String)
 
-@export var server_url := "http://127.0.0.1:8000"
+var server_url := ""
 @export var request_timeout_seconds := 8.0
 var _http := HTTPRequest.new()
 
