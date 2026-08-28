@@ -4,10 +4,10 @@ set -e
 cd /opt/AI_World
 
 
-if [ ! -f /server/.env ]; then
-    echo "ERROR: /opt/AI_World/server/.env does not exist."
-    exit 1
-fi
+# if [ ! -f /server/.env ]; then
+#     echo "ERROR: /opt/AI_World/server/.env does not exist."
+#     exit 1
+# fi
 
 echo "=== Pulling latest main ==="
 git checkout main
