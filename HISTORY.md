@@ -82,6 +82,14 @@ Each agent now keeps its own:
 - Each Godot run now recreates `logs/simulation.log` for readable event output and `logs/simulation.jsonl` for one JSON object per log event.
 - Log records include a timestamp and simulation tick; files are flushed after every event and closed when the scene exits.
 
+## 2026-08-28 — V7.1: Survival execution loop
+
+- Added an action state machine (`IDLE`, `APPROACHING_TARGET`, `EXECUTING`, `COMPLETED`, `FAILED`) that commits agents to an interaction while they physically approach its target.
+- Gather, drink, give, and talk now approach valid distant targets automatically before executing; no movement instructions are sent to the AI.
+- Added explicit action-failure reasons including `TOO_FAR`, `RESOURCE_EMPTY`, `TARGET_MISSING`, `INVALID_TARGET`, `OUT_OF_INVENTORY`, and `NAVIGATION_FAILED`.
+- Replaced continuous urgent-need checks with threshold-crossing triggers and re-arm hysteresis after recovery.
+- Added AI request counters and approach/arrival/completion logs for simulation debugging.
+
 ## Deliberately deferred
 
 The project still intentionally excludes survival-world features and persistence infrastructure: crafting, economy, combat, animals, buildings, databases, embeddings, vector search, RAG, planners, and long-term save/load.

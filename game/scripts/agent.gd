@@ -16,8 +16,10 @@ const ACTIONS := ["wander", "explore", "gather", "eat", "drink", "give", "talk",
 const GOALS := ["find_food", "find_water", "rest", "explore", "socialize", "help_agent", "idle"]
 const SPEED := 115.0
 const CONTEXT_LIMIT := 8
+enum ActionState { IDLE, APPROACHING_TARGET, EXECUTING, COMPLETED, FAILED }
 var current_action := "wait"
 var current_goal := "idle"
+var action_state := ActionState.IDLE
 var relationships: Dictionary = {}
 var inventory: Dictionary = {"berry": 0}
 var known_locations: Dictionary = {}
@@ -34,6 +36,10 @@ var _talked_at: Dictionary = {}
 var _last_messages: Dictionary = {}
 var _decision_in_flight := false
 var _destination := Vector2.ZERO
+var _pending_intent: Dictionary = {}
+var _urgent_hunger_armed := true
+var _urgent_thirst_armed := true
+var ai_request_count := 0
 var _client: AIClient
 var _world: Node
 
@@ -49,11 +55,12 @@ func setup(world: Node, server_address: String) -> void:
 	_decision_loop()
 
 func _physics_process(_delta: float) -> void:
-	if current_action == "wander" or current_action == "talk":
+	if current_action == "wander" or current_action == "talk" or action_state == ActionState.APPROACHING_TARGET:
 		velocity = global_position.direction_to(_destination) * SPEED
 		if global_position.distance_to(_destination) < 5.0:
 			velocity = Vector2.ZERO
-			if current_action == "wander": _action_complete = true
+			if action_state == ActionState.APPROACHING_TARGET: _world.arrived_at_target(self)
+			elif current_action == "wander": mark_action_completed()
 		move_and_slide()
 
 func _decision_loop() -> void:
@@ -61,17 +68,21 @@ func _decision_loop() -> void:
 		var trigger := should_request_decision()
 		if not trigger.is_empty():
 			_decision_reason = trigger
-			_world.log_event("%s decision requested: %s" % [agent_name, trigger])
+			ai_request_count += 1
+			_world.log_event("%s AI_REQUEST #%s reason=%s" % [agent_name, ai_request_count, trigger])
 			_decision_in_flight = true
 			_client.request_decision(_world.build_observation(self))
 		await get_tree().create_timer(0.5).timeout
 
 func should_request_decision() -> String:
 	if _decision_in_flight: return ""
+	if action_state == ActionState.APPROACHING_TARGET: return ""
 	if not pending_messages.is_empty(): return "MESSAGE_RECEIVED"
 	if _important_event: return "IMPORTANT_EVENT"
-	if hunger >= 85: return "URGENT_NEED"
-	if thirst >= 85: return "THIRST_THRESHOLD"
+	if hunger >= 70 and _urgent_hunger_armed:
+		_urgent_hunger_armed = false; return "HUNGER_URGENT"
+	if thirst >= 70 and _urgent_thirst_armed:
+		_urgent_thirst_armed = false; return "THIRST_URGENT"
 	if _action_complete: return "ACTION_COMPLETE"
 	if _world.world_tick - last_decision_tick >= decision_interval: return "DECISION_TIMEOUT"
 	return ""
@@ -87,6 +98,7 @@ func _on_decision_received(decision: Dictionary) -> void:
 	if not ACTIONS.has(action): action = "wait"
 	if not GOALS.has(current_goal): current_goal = "idle"
 	last_reason = str(decision.get("reason", "No reason provided."))
+	action_state = ActionState.EXECUTING
 	_world.log_event("%s decision %s target=%s" % [agent_name, action.to_upper(), str(decision.get("target_id", ""))])
 	_world.execute_intent(self, action, str(decision.get("target_id", "")), str(decision.get("message", "")), decision.get("parameters", {}))
 	pending_messages.clear()
@@ -168,7 +180,23 @@ func set_talk_target(target: WorldAgent, message: String) -> void:
 	current_action = "talk"; _destination = target.global_position; _action_complete = false; update_status("To %s: %s" % [target.agent_name, message])
 
 func wait_safely() -> void:
-	current_action = "wait"; velocity = Vector2.ZERO; _action_complete = false; update_status("Waiting — %s" % current_goal)
+	current_action = "wait"; velocity = Vector2.ZERO; action_state = ActionState.IDLE; _action_complete = false; update_status("Waiting — %s" % current_goal)
+
+func begin_approach(intent: Dictionary, destination: Vector2, target_name: String) -> void:
+	_pending_intent = intent; _destination = destination; current_action = str(intent.action); action_state = ActionState.APPROACHING_TARGET; _action_complete = false
+	update_status("Approaching %s" % target_name)
+	_world.log_event("%s state=APPROACHING_TARGET target=%s" % [agent_name, target_name])
+
+func take_pending_intent() -> Dictionary:
+	var intent := _pending_intent; _pending_intent = {}; return intent
+
+func mark_action_completed() -> void:
+	action_state = ActionState.COMPLETED; _action_complete = true; _pending_intent = {}
+	_world.log_event("%s action completed" % agent_name)
+
+func mark_action_failed(reason: String) -> void:
+	action_state = ActionState.FAILED; _action_complete = true; _pending_intent = {}
+	_world.log_event("%s action failed: %s" % [agent_name, reason])
 
 func update_status(text: String) -> void:
 	$NameLabel.text = "%s  (H:%s E:%s)" % [agent_name, hunger, energy]
@@ -199,3 +227,5 @@ func apply_needs() -> void:
 	thirst = clampi(thirst + int(WorldConfig.THIRST_PER_TICK), 0, 100)
 	if current_action == "rest": energy = mini(100, energy + int(WorldConfig.REST_ENERGY_PER_TICK))
 	elif current_action != "wait": energy = maxi(0, energy - int(WorldConfig.ENERGY_ACTIVE_PER_TICK))
+	if hunger <= 55: _urgent_hunger_armed = true
+	if thirst <= 55: _urgent_thirst_armed = true

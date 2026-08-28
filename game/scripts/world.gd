@@ -110,9 +110,10 @@ func execute_intent(agent: WorldAgent, action: String, target_id: String, messag
 		"go_to_known": _go_to_known(agent, target_id)
 		"talk":
 			var target: WorldAgent = _agent_by_id(target_id)
-			if target == null or target == agent or agent.global_position.distance_to(target.global_position) > perception_radius:
-				log_event("%s TALK rejected: invalid, self, or unreachable target." % agent.agent_name)
-				agent.wait_safely()
+			if target == null or target == agent:
+				agent.mark_action_failed("INVALID_TARGET")
+			elif agent.global_position.distance_to(target.global_position) > WorldConfig.INTERACTION_DISTANCE:
+				_begin_approach(agent, action, target_id, message, parameters, target.global_position, target.agent_name)
 			elif not agent.can_talk_to(target_id, message):
 				log_event("%s TALK rejected: cooldown or repeated message." % agent.agent_name)
 				agent.wait_safely()
@@ -123,26 +124,44 @@ func execute_intent(agent: WorldAgent, action: String, target_id: String, messag
 		"wander": agent.set_wander_destination(_random_world_position(agent.global_position))
 		_: agent.wait_safely()
 
+func _begin_approach(agent: WorldAgent, action: String, target_id: String, message: String, parameters: Dictionary, destination: Vector2, target_name: String) -> void:
+	log_event("%s target distance=%s" % [agent.agent_name, roundi(agent.global_position.distance_to(destination))])
+	agent.begin_approach({"action": action, "target_id": target_id, "message": message, "parameters": parameters}, destination, target_name)
+
+func arrived_at_target(agent: WorldAgent) -> void:
+	var intent := agent.take_pending_intent()
+	if intent.is_empty(): agent.mark_action_failed("NAVIGATION_FAILED"); return
+	log_event("%s arrived at %s" % [agent.agent_name, str(intent.target_id)])
+	agent.action_state = WorldAgent.ActionState.EXECUTING
+	execute_intent(agent, str(intent.action), str(intent.target_id), str(intent.message), intent.parameters)
+
 func _gather(agent: WorldAgent, target_id: String) -> void:
 	var entity: Dictionary = environment_entities.get(target_id, {})
-	if entity.is_empty() or entity.type != "berry_bush" or int(entity.berries_available) <= 0 or agent.global_position.distance_to(Vector2(entity.world_position.x, entity.world_position.y)) > WorldConfig.INTERACTION_DISTANCE:
-		log_event("%s gather failed: unavailable or too far." % agent.agent_name); agent.wait_safely(); return
+	if entity.is_empty(): agent.mark_action_failed("TARGET_MISSING"); return
+	if entity.type != "berry_bush": agent.mark_action_failed("INVALID_TARGET"); return
+	if int(entity.berries_available) <= 0: agent.mark_action_failed("RESOURCE_EMPTY"); return
+	var distance := agent.global_position.distance_to(Vector2(entity.world_position.x, entity.world_position.y))
+	if distance > WorldConfig.INTERACTION_DISTANCE: _begin_approach(agent, "gather", target_id, "", {}, Vector2(entity.world_position.x, entity.world_position.y), str(entity.name)); return
 	entity.berries_available = int(entity.berries_available) - 1; environment_entities[target_id] = entity; agent.add_item("berry", 1)
-	log_event("%s gathered 1 Berry (inventory %s)." % [agent.agent_name, agent.get_item_count("berry")]); publish_event({"type": "resource_gathered", "actor_id": agent.agent_id, "target_id": target_id, "item": "berry", "quantity": 1, "position": entity.world_position})
+	log_event("%s gathered 1 Berry (inventory %s)." % [agent.agent_name, agent.get_item_count("berry")]); agent.mark_action_completed(); publish_event({"type": "resource_gathered", "actor_id": agent.agent_id, "target_id": target_id, "item": "berry", "quantity": 1, "position": entity.world_position})
 
 func _eat(agent: WorldAgent, item: String) -> void:
-	if not agent.remove_item(item, 1): log_event("%s eat failed: no %s." % [agent.agent_name, item]); agent.wait_safely(); return
-	agent.hunger = maxi(0, agent.hunger - WorldConfig.BERRY_NUTRITION); agent.wait_safely(); log_event("%s ate Berry. Hunger: %s" % [agent.agent_name, agent.hunger])
+	if not agent.remove_item(item, 1): agent.mark_action_failed("OUT_OF_INVENTORY"); return
+	agent.hunger = maxi(0, agent.hunger - WorldConfig.BERRY_NUTRITION); agent.mark_action_completed(); log_event("%s ate Berry. Hunger: %s" % [agent.agent_name, agent.hunger])
 
 func _drink(agent: WorldAgent, target_id: String) -> void:
 	var entity: Dictionary = environment_entities.get(target_id, {})
-	if entity.is_empty() or entity.type != "water" or agent.global_position.distance_to(Vector2(entity.world_position.x, entity.world_position.y)) > WorldConfig.INTERACTION_DISTANCE: log_event("%s drink failed." % agent.agent_name); agent.wait_safely(); return
-	agent.thirst = maxi(0, agent.thirst - WorldConfig.WATER_HYDRATION); agent.wait_safely(); log_event("%s drank water. Thirst: %s" % [agent.agent_name, agent.thirst])
+	if entity.is_empty(): agent.mark_action_failed("TARGET_MISSING"); return
+	if entity.type != "water": agent.mark_action_failed("INVALID_TARGET"); return
+	if agent.global_position.distance_to(Vector2(entity.world_position.x, entity.world_position.y)) > WorldConfig.INTERACTION_DISTANCE: _begin_approach(agent, "drink", target_id, "", {}, Vector2(entity.world_position.x, entity.world_position.y), str(entity.name)); return
+	var old_thirst := agent.thirst; agent.thirst = maxi(0, agent.thirst - WorldConfig.WATER_HYDRATION); agent.mark_action_completed(); log_event("%s drank water. Thirst: %s -> %s" % [agent.agent_name, old_thirst, agent.thirst])
 
 func _give(agent: WorldAgent, target_id: String, parameters: Dictionary) -> void:
-	var target := _agent_by_id(target_id); var quantity := int(parameters.get("quantity", 1))
-	if target == null or target == agent or quantity < 1 or not agent.remove_item(str(parameters.get("item", "berry")), quantity): log_event("%s give failed." % agent.agent_name); agent.wait_safely(); return
-	target.add_item("berry", quantity); target.change_relationship(agent.agent_id, WorldConfig.GIVE_TRUST, WorldConfig.GIVE_AFFINITY); log_event("%s gave %s berry to %s." % [agent.agent_name, quantity, target.agent_name])
+	var target: WorldAgent = _agent_by_id(target_id); var quantity: int = int(parameters.get("quantity", 1)); var item := str(parameters.get("item", "berry"))
+	if target == null or target == agent or quantity < 1: agent.mark_action_failed("INVALID_TARGET"); return
+	if agent.global_position.distance_to(target.global_position) > WorldConfig.INTERACTION_DISTANCE: _begin_approach(agent, "give", target_id, "", parameters, target.global_position, target.agent_name); return
+	if not agent.remove_item(item, quantity): agent.mark_action_failed("OUT_OF_INVENTORY"); return
+	target.add_item(item, quantity); target.change_relationship(agent.agent_id, WorldConfig.GIVE_TRUST, WorldConfig.GIVE_AFFINITY); agent.mark_action_completed(); log_event("%s gave %s %s to %s." % [agent.agent_name, quantity, item, target.agent_name])
 
 func _go_to_known(agent: WorldAgent, target_id: String) -> void:
 	var known: Dictionary = agent.known_locations.get(target_id, {}); if known.is_empty(): agent.wait_safely(); return
