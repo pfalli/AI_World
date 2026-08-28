@@ -61,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf game/web
+          mkdir -p game/web
           godot --headless --path game --export-release "Web" web/index.html
           test -f game/web/index.html
 
