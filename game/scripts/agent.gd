@@ -8,6 +8,8 @@ extends CharacterBody2D
 @export var energy := 100
 @export var personality: Dictionary = {"friendliness": 0.5, "cooperation": 0.5, "curiosity": 0.5, "selfishness": 0.5, "aggression": 0.5}
 @export var body_color := Color.WHITE
+@export_file("*.png") var walk_sheet_path := "res://assets/character_variants/alice_4DirectionWalk.png"
+@export_file("*.png") var idle_sheet_path := "res://assets/character_variants/alice_4DirectionIdle.png"
 @export var decision_interval := 12
 @export var talk_cooldown_ticks := 15
 @export var max_memories := 100
@@ -45,6 +47,8 @@ var _urgent_thirst_armed := true
 var ai_request_count := 0
 var _client: AIClient
 var _world: Node
+var _last_facing := "down"
+
 
 func setup(world: Node, server_address: String) -> void:
 	_world = world
@@ -53,7 +57,7 @@ func setup(world: Node, server_address: String) -> void:
 	add_child(_client)
 	_client.decision_received.connect(_on_decision_received)
 	_client.request_failed.connect(_on_request_failed)
-	$Body.color = body_color
+	_setup_visuals()
 	update_status("Waiting")
 	_decision_loop()
 
@@ -65,6 +69,51 @@ func _physics_process(_delta: float) -> void:
 			if action_state == ActionState.APPROACHING_TARGET: _world.arrived_at_target(self)
 			elif current_action == "wander": mark_action_completed()
 		move_and_slide()
+		# Destinations remain simulation-owned; this is a final world-edge guard only.
+		global_position = Vector2(
+			clampf(global_position.x, WorldConfig.MAP_BOUNDS.position.x, WorldConfig.MAP_BOUNDS.end.x),
+			clampf(global_position.y, WorldConfig.MAP_BOUNDS.position.y, WorldConfig.MAP_BOUNDS.end.y)
+		)
+	_update_animation()
+
+func _setup_visuals() -> void:
+	var frames := SpriteFrames.new()
+	var walk_sheet := load(walk_sheet_path) as Texture2D
+	var idle_sheet := load(idle_sheet_path) as Texture2D
+	# Pack layout: walk is 4 x 4 16x32px frames; idle is 6 x 7 16x32px frames.
+	# The first four rows match the four walk directions.
+	for row_direction in ["down", "left", "right", "up"]:
+		frames.add_animation("walk_" + row_direction)
+		frames.set_animation_speed("walk_" + row_direction, 6.0)
+		for column in range(4):
+			frames.add_frame("walk_" + row_direction, _atlas_frame(walk_sheet, column, ["down", "left", "right", "up"].find(row_direction)))
+		frames.add_animation("idle_" + row_direction)
+		frames.set_animation_speed("idle_" + row_direction, 3.0)
+		for column in range(6):
+			frames.add_frame("idle_" + row_direction, _atlas_frame(idle_sheet, column, ["down", "left", "right", "up"].find(row_direction)))
+	$Visual.sprite_frames = frames
+	$Visual.modulate = Color.WHITE
+	$Visual.play("idle_down")
+	$NameLabel.text = agent_name
+
+func _atlas_frame(texture: Texture2D, column: int, row: int) -> AtlasTexture:
+	var frame := AtlasTexture.new()
+	frame.atlas = texture
+	frame.region = Rect2(column * 16, row * 32, 16, 32)
+	return frame
+
+func _update_animation() -> void:
+	if velocity.length_squared() > 1.0:
+		if absf(velocity.x) > absf(velocity.y): _last_facing = "right" if velocity.x > 0.0 else "left"
+		else: _last_facing = "down" if velocity.y > 0.0 else "up"
+		$Visual.play("walk_" + _last_facing)
+	else:
+		$Visual.play("idle_" + _last_facing)
+	if $DebugLabel.visible:
+		$DebugLabel.text = "%s  %s\n(%d, %d)" % [current_action, ActionState.keys()[action_state], global_position.x, global_position.y]
+
+func set_debug_visible(value: bool) -> void:
+	$DebugLabel.visible = value
 
 func _decision_loop() -> void:
 	while is_instance_valid(_world):
@@ -223,8 +272,7 @@ func mark_action_failed(reason: String) -> void:
 	_world.log_event("%s ACTION #%s %s failed: %s" % [agent_name, failed_id, failed_name.to_upper(), reason])
 
 func update_status(text: String) -> void:
-	$NameLabel.text = "%s  (H:%s E:%s)" % [agent_name, hunger, energy]
-	$StatusLabel.text = text
+	$NameLabel.text = agent_name
 
 func add_item(item: String, quantity: int) -> void:
 	inventory[item] = int(inventory.get(item, 0)) + quantity
