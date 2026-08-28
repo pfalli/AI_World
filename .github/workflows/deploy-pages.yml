@@ -31,6 +31,7 @@ jobs:
           curl --fail --location --retry 3 --output "$GODOT_ARCHIVE" "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/${GODOT_ARCHIVE}"
           unzip -q "$GODOT_ARCHIVE" -d "$RUNNER_TEMP/godot"
           chmod +x "$RUNNER_TEMP/godot/Godot_v${GODOT_VERSION}_linux.x86_64"
+          ln -s "Godot_v${GODOT_VERSION}_linux.x86_64" "$RUNNER_TEMP/godot/godot"
           echo "$RUNNER_TEMP/godot" >> "$GITHUB_PATH"
           curl --fail --location --retry 3 --output "$TEMPLATE_ARCHIVE" "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/${TEMPLATE_ARCHIVE}"
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.7.2.stable"
