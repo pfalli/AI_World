@@ -82,15 +82,14 @@ To add Charlie, instance `res://scenes/agent.tscn` as a child of `World/Agents`,
 Memory and relationships are intentionally in-memory only and reset when the simulation stops. Event visibility is radius-based, the fake provider is deterministic rather than human-like, and the world still has only the one apple and the original four actions. There is no survival-world content, database, embedding, or planner.
 
 ## References
+I advice to check these ideas and documentation about AI Village and agents interaction:
 https://github.com/a16z-infra/ai-town
 
 https://github.com/he-yufeng/CoreCoder
 
 ## Assets / Credits
 
-- **Seasons of Forest — Free Sample** by **InkBubi**, source: [itch.io](https://inkbubi.itch.io/seasons-of-forest-tileset), licensed **CC0 1.0**. Its supplied `license.txt` remains in `game/assets/seasons_of_forest_free_v1/`.
-- **Top-Down Tileset + Animated Character Pack** (`game/assets/AssetPack/AssetPack`): used for the animated character sheets. This copy contains no README, author, source URL, or license file, so no license is asserted here; confirm its provenance before redistributing the project.
+- **Seasons of Forest — Free Sample** by **InkBubi**, source: [itch.io](https://inkbubi.itch.io/seasons-of-forest-tileset), licensed **CC0 1.0**. Its supplied `license.txt`;
+- **Top-Down Tileset + Animated Character Pack** (`game/assets/AssetPack/AssetPack`): used for the animated character sheets;
 
-### Web Deployment
 
-Production deploys from `main`. GitHub Actions exports the Godot Web build and GitHub Pages hosts the frontend; generated `game/web/` files are not committed. Feature branches do not deploy to production.
