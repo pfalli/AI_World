@@ -8,6 +8,8 @@ extends CharacterBody2D
 @export var energy := 100
 @export var personality: Dictionary = {"friendliness": 0.5, "cooperation": 0.5, "curiosity": 0.5, "selfishness": 0.5, "aggression": 0.5}
 @export var body_color := Color.WHITE
+@export_file("*.png") var walk_sheet_path := "res://assets/character_variants/alice_4DirectionWalk.png"
+@export_file("*.png") var idle_sheet_path := "res://assets/character_variants/alice_4DirectionIdle.png"
 @export var decision_interval := 12
 @export var talk_cooldown_ticks := 15
 @export var max_memories := 100
@@ -47,8 +49,6 @@ var _client: AIClient
 var _world: Node
 var _last_facing := "down"
 
-const WALK_SHEET := preload("res://assets/AssetPack/AssetPack/4DirectionWalk.png")
-const IDLE_SHEET := preload("res://assets/AssetPack/AssetPack/4DirectionIdle.png")
 
 func setup(world: Node, server_address: String) -> void:
 	_world = world
@@ -73,26 +73,28 @@ func _physics_process(_delta: float) -> void:
 
 func _setup_visuals() -> void:
 	var frames := SpriteFrames.new()
-	# Pack layout verified from source images: walk is 2 x 4 32px frames;
-	# idle is 3 x 7 32px frames. The first four rows match the four walk directions.
+	var walk_sheet := load(walk_sheet_path) as Texture2D
+	var idle_sheet := load(idle_sheet_path) as Texture2D
+	# Pack layout: walk is 4 x 4 16x32px frames; idle is 6 x 7 16x32px frames.
+	# The first four rows match the four walk directions.
 	for row_direction in ["down", "left", "right", "up"]:
 		frames.add_animation("walk_" + row_direction)
 		frames.set_animation_speed("walk_" + row_direction, 6.0)
-		for column in range(2):
-			frames.add_frame("walk_" + row_direction, _atlas_frame(WALK_SHEET, column, ["down", "left", "right", "up"].find(row_direction)))
+		for column in range(4):
+			frames.add_frame("walk_" + row_direction, _atlas_frame(walk_sheet, column, ["down", "left", "right", "up"].find(row_direction)))
 		frames.add_animation("idle_" + row_direction)
 		frames.set_animation_speed("idle_" + row_direction, 3.0)
-		for column in range(3):
-			frames.add_frame("idle_" + row_direction, _atlas_frame(IDLE_SHEET, column, ["down", "left", "right", "up"].find(row_direction)))
+		for column in range(6):
+			frames.add_frame("idle_" + row_direction, _atlas_frame(idle_sheet, column, ["down", "left", "right", "up"].find(row_direction)))
 	$Visual.sprite_frames = frames
-	$Visual.modulate = body_color
+	$Visual.modulate = Color.WHITE
 	$Visual.play("idle_down")
 	$NameLabel.text = agent_name
 
 func _atlas_frame(texture: Texture2D, column: int, row: int) -> AtlasTexture:
 	var frame := AtlasTexture.new()
 	frame.atlas = texture
-	frame.region = Rect2(column * 32, row * 32, 32, 32)
+	frame.region = Rect2(column * 16, row * 32, 16, 32)
 	return frame
 
 func _update_animation() -> void:

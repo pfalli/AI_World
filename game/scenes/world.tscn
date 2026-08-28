@@ -40,18 +40,26 @@ agent_id = "alice"
 agent_name = "Alice"
 personality = {"friendliness": 0.9, "cooperation": 0.9, "curiosity": 0.8, "selfishness": 0.1, "aggression": 0.1}
 body_color = Color(0.90, 0.96, 1, 1)
+walk_sheet_path = "res://assets/character_variants/alice_4DirectionWalk.png"
+idle_sheet_path = "res://assets/character_variants/alice_4DirectionIdle.png"
+
 [node name="Bob" parent="SimulationEntities/Agents" instance=ExtResource("2")]
 position = Vector2(520, 340)
 agent_id = "bob"
 agent_name = "Bob"
 personality = {"friendliness": 0.3, "cooperation": 0.2, "curiosity": 0.5, "selfishness": 0.8, "aggression": 0.4}
 body_color = Color(1, 0.91, 0.78, 1)
+walk_sheet_path = "res://assets/character_variants/bob_4DirectionWalk.png"
+idle_sheet_path = "res://assets/character_variants/bob_4DirectionIdle.png"
+
 [node name="Charlie" parent="SimulationEntities/Agents" instance=ExtResource("2")]
 position = Vector2(375, 345)
 agent_id = "charlie"
 agent_name = "Charlie"
 personality = {"friendliness": 0.65, "cooperation": 0.55, "curiosity": 0.9, "selfishness": 0.35, "aggression": 0.15}
 body_color = Color(0.83, 1, 0.86, 1)
+walk_sheet_path = "res://assets/character_variants/charlie_4DirectionWalk.png"
+idle_sheet_path = "res://assets/character_variants/charlie_4DirectionIdle.png"
 
 [node name="ObserverCamera" type="Camera2D" parent="."]
 position = Vector2(480, 320)
