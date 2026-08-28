@@ -6,6 +6,7 @@ __pycache__/
 
 # Godot
 .godot/
+game/web/
 *.import
 .vscode
 *.log

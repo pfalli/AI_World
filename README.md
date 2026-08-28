@@ -90,3 +90,7 @@ https://github.com/he-yufeng/CoreCoder
 
 - **Seasons of Forest — Free Sample** by **InkBubi**, source: [itch.io](https://inkbubi.itch.io/seasons-of-forest-tileset), licensed **CC0 1.0**. Its supplied `license.txt` remains in `game/assets/seasons_of_forest_free_v1/`.
 - **Top-Down Tileset + Animated Character Pack** (`game/assets/AssetPack/AssetPack`): used for the animated character sheets. This copy contains no README, author, source URL, or license file, so no license is asserted here; confirm its provenance before redistributing the project.
+
+### Web Deployment
+
+Production deploys from `main`. GitHub Actions exports the Godot Web build and GitHub Pages hosts the frontend; generated `game/web/` files are not committed. Feature branches do not deploy to production.
