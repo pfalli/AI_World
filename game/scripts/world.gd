@@ -10,19 +10,32 @@ var conversation_threads: Dictionary = {}
 var selected_agent: WorldAgent
 var _text_log: FileAccess
 var _jsonl_log: FileAccess
-@onready var agents: Node2D = $Agents
-@onready var event_panel: TextEdit = $EventPanel
-@onready var agent_panel: TextEdit = $AgentPanel
+@onready var agents: Node2D = $SimulationEntities/Agents
+@onready var event_panel: TextEdit = $HUD/EventPanel
+@onready var agent_panel: TextEdit = $HUD/AgentPanel
+@onready var observer_camera: Camera2D = $ObserverCamera
+@onready var ground: TileMapLayer = $VisualWorld/Ground
+@onready var terrain: TileMapLayer = $VisualWorld/Terrain
+@onready var decorations: Node2D = $VisualWorld/Decorations
+var debug_visible := false
+var log_visible := false
+const GRASS_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/grass.png")
+const WATER_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/grass_deep_water.png")
+const TREE_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/trees.png")
+const BUSH_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/bushes.png")
+const STONE_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/stones.png")
 
 func _ready() -> void:
 	randomize()
+	_build_visual_world()
+	_build_resource_visuals()
 	_open_simulation_logs()
 	_register_environment()
 	for agent: WorldAgent in agents.get_children():
 		agent.setup(self, server_url)
-		if selected_agent == null: selected_agent = agent
 	log_event("World ready. Forest resources are available.")
-	show_agent_info(selected_agent)
+	event_panel.visible = log_visible
+	agent_panel.visible = false
 
 func _exit_tree() -> void:
 	if _text_log: _text_log.close()
@@ -53,15 +66,107 @@ func _process(delta: float) -> void:
 		_tick_seconds = 0.0
 		for agent: WorldAgent in agents.get_children(): agent.apply_needs()
 	if selected_agent: show_agent_info(selected_agent)
+	_update_camera(delta)
+	_update_selection_indicator()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F3:
+			debug_visible = not debug_visible
+			for agent: WorldAgent in agents.get_children(): agent.set_debug_visible(debug_visible)
+			get_viewport().set_input_as_handled()
+			return
+		if event.keycode == KEY_L:
+			log_visible = not log_visible
+			event_panel.visible = log_visible
+			get_viewport().set_input_as_handled()
+			return
+	if event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		var factor := 1.12 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.89
+		var next_zoom := clampf(observer_camera.zoom.x * factor, 0.75, 2.0)
+		observer_camera.zoom = Vector2(next_zoom, next_zoom)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		for agent: WorldAgent in agents.get_children():
 			if agent.global_position.distance_to(get_global_mouse_position()) < 36.0:
 				selected_agent = agent
+				agent_panel.visible = true
 				show_agent_info(agent)
 				get_viewport().set_input_as_handled()
 				return
+
+func _update_camera(delta: float) -> void:
+	var direction := Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
+	# Default UI actions include arrow keys; WASD is intentionally observer-only input.
+	direction += Vector2(float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)), float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W)))
+	if direction.length_squared() > 0.0:
+		observer_camera.position += direction.normalized() * 440.0 * delta
+		observer_camera.position.x = clampf(observer_camera.position.x, 240.0, 720.0)
+		observer_camera.position.y = clampf(observer_camera.position.y, 160.0, 480.0)
+
+func _update_selection_indicator() -> void:
+	for agent: WorldAgent in agents.get_children():
+		agent.get_node("SelectionIndicator").visible = agent == selected_agent
+
+func _build_visual_world() -> void:
+	var forest_tileset := TileSet.new()
+	forest_tileset.tile_size = Vector2i(16, 16)
+	var grass_source := TileSetAtlasSource.new()
+	grass_source.texture = GRASS_TEXTURE
+	grass_source.texture_region_size = Vector2i(16, 16)
+	for y in range(4):
+		for x in range(4): grass_source.create_tile(Vector2i(x, y))
+	forest_tileset.add_source(grass_source, 0)
+	var water_source := TileSetAtlasSource.new()
+	water_source.texture = WATER_TEXTURE
+	water_source.texture_region_size = Vector2i(16, 16)
+	for y in range(16):
+		for x in range(14): water_source.create_tile(Vector2i(x, y))
+	forest_tileset.add_source(water_source, 1)
+	ground.tile_set = forest_tileset
+	terrain.tile_set = forest_tileset
+	ground.collision_enabled = false
+	terrain.collision_enabled = false
+	var grass_cells: Array[Vector2i] = []
+	for y in range(40):
+		for x in range(60): grass_cells.append(Vector2i(x, y))
+	for cell in grass_cells: ground.set_cell(cell, 0, Vector2i((cell.x + cell.y) % 4, (cell.x * 3 + cell.y) % 4))
+	# A deterministic 12 x 8 oval around the existing logical water source at (720, 190).
+	var pond_cells: Array[Vector2i] = []
+	for y in range(8, 18):
+		for x in range(38, 53):
+			var dx := (x - 45.0) / 7.5
+			var dy := (y - 12.5) / 4.7
+			if dx * dx + dy * dy <= 1.0: pond_cells.append(Vector2i(x, y))
+	for cell in pond_cells:
+		# The provided deep-water atlas's 12:0 tile is its full-water interior.
+		terrain.set_cell(cell, 1, Vector2i(12, 0))
+	# The surrounding cells use the atlas's connected grass/water edge tile, creating a clean shore.
+	for cell in pond_cells:
+		for neighbor in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			if not pond_cells.has(cell + neighbor): terrain.set_cell(cell + neighbor, 1, Vector2i(0, 0))
+	# Perimeter clusters are intentional decoration only; they create no simulation entities.
+	for point in [Vector2(56, 88), Vector2(120, 104), Vector2(190, 72), Vector2(838, 76), Vector2(896, 124), Vector2(64, 492), Vector2(140, 548), Vector2(820, 520), Vector2(900, 474), Vector2(74, 288), Vector2(890, 286)]:
+		_add_region_sprite(decorations, TREE_TEXTURE, point, Rect2(0, 0, 64, 64), Vector2(0, -32))
+	for point in [Vector2(224, 132), Vector2(332, 410), Vector2(590, 110), Vector2(625, 488), Vector2(770, 404), Vector2(178, 455)]:
+		_add_region_sprite(decorations, BUSH_TEXTURE, point, Rect2(0, 0, 16, 16), Vector2.ZERO)
+	for point in [Vector2(724, 366), Vector2(754, 382), Vector2(784, 374), Vector2(808, 390)]:
+		_add_region_sprite(decorations, STONE_TEXTURE, point, Rect2(0, 0, 32, 32), Vector2(0, -8))
+
+func _build_resource_visuals() -> void:
+	_add_region_sprite($SimulationEntities/Trees/Tree_1, TREE_TEXTURE, Vector2.ZERO, Rect2(0, 0, 64, 64), Vector2(0, -32))
+	_add_region_sprite($SimulationEntities/BerryBushes/Berry_Bush_1, BUSH_TEXTURE, Vector2.ZERO, Rect2(0, 0, 16, 16), Vector2.ZERO)
+	_add_region_sprite($SimulationEntities/Rocks/Rock_1, STONE_TEXTURE, Vector2.ZERO, Rect2(0, 0, 32, 32), Vector2(0, -8))
+
+func _add_region_sprite(parent: Node, texture: Texture2D, position: Vector2, region: Rect2, offset: Vector2) -> void:
+	var sprite := Sprite2D.new()
+	sprite.texture = texture
+	sprite.region_enabled = true
+	sprite.region_rect = region
+	sprite.position = position + offset
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	parent.add_child(sprite)
 
 func build_observation(observer: WorldAgent) -> Dictionary:
 	var entities: Array[Dictionary] = []
@@ -171,10 +276,11 @@ func _explore_destination(agent: WorldAgent) -> Vector2:
 	return _random_world_position(agent.global_position)
 
 func _register_environment() -> void:
-	for node in $Environment.get_children():
-		var entity: Dictionary = {"id": node.name.to_lower(), "name": node.name.replace("_", " "), "type": str(node.get_meta("entity_type")), "world_position": {"x": node.global_position.x, "y": node.global_position.y}}
-		if entity.type == "berry_bush": entity["berries_available"] = 5; entity["max_berries"] = 5
-		environment_entities[entity.id] = entity
+	for group in [$SimulationEntities/Trees, $SimulationEntities/BerryBushes, $SimulationEntities/WaterSources, $SimulationEntities/Rocks]:
+		for node in group.get_children():
+			var entity: Dictionary = {"id": node.name.to_lower(), "name": node.name.replace("_", " "), "type": str(node.get_meta("entity_type")), "world_position": {"x": node.global_position.x, "y": node.global_position.y}}
+			if entity.type == "berry_bush": entity["berries_available"] = 5; entity["max_berries"] = 5
+			environment_entities[entity.id] = entity
 
 func _publish_message(actor: WorldAgent, target: WorldAgent, text: String) -> void:
 	var event := {"type": "message", "actor_id": actor.agent_id, "actor_name": actor.agent_name, "target_agent_id": target.agent_id, "text": text, "position": {"x": actor.global_position.x, "y": actor.global_position.y}}

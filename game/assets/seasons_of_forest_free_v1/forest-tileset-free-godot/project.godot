@@ -10,20 +10,13 @@ config_version=5
 
 [application]
 
-config/name="AI World"
-run/main_scene="res://scenes/world.tscn"
-config/features=PackedStringArray("4.7")
-
-[display]
-
-window/size/viewport_width=960
-window/size/viewport_height=640
-window/size/window_width_override=960
-window/size/window_height_override=640
+config/name="Forest tileset Free"
+config/tags=PackedStringArray("4.4", "selling")
+config/features=PackedStringArray("4.4", "GL Compatibility")
+config/icon="res://icon.svg"
 
 [rendering]
 
+textures/canvas_textures/default_texture_filter=0
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-textures/default_filters/use_nearest_mipmap_filter=false
-textures/canvas_textures/default_texture_filter=0
