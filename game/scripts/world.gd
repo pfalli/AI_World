@@ -7,24 +7,27 @@ var world_tick := 0
 var _tick_seconds := 0.0
 var _event_sequence := 0
 var conversation_threads: Dictionary = {}
+var conversation_sessions: Dictionary = {}
 var selected_agent: WorldAgent
 var _text_log: FileAccess
 var _jsonl_log: FileAccess
 @onready var agents: Node2D = $SimulationEntities/Agents
 @onready var event_panel: TextEdit = $HUD/EventPanel
 @onready var agent_panel: TextEdit = $HUD/AgentPanel
-@onready var observer_camera: Camera2D = $ObserverCamera
+@onready var agent_panel_close: Button = $HUD/AgentPanelClose
 @onready var ground: TileMapLayer = $VisualWorld/Ground
 @onready var terrain: TileMapLayer = $VisualWorld/Terrain
 @onready var decorations: Node2D = $VisualWorld/Decorations
 var debug_visible := false
-var log_visible := false
 const GRASS_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/grass.png")
 const WATER_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/grass_deep_water.png")
 const TREE_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/trees.png")
 const BUSH_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/bushes.png")
 const STONE_TEXTURE := preload("res://assets/seasons_of_forest_free_v1/texture only/Forest Tileset - Free/stones.png")
 const API_CONFIG := preload("res://scripts/api_config.gd")
+const INTENT_PLANNER := preload("res://scripts/intent_planner.gd")
+const ACTION_VALIDATOR := preload("res://scripts/action_validator.gd")
+const CONVERSATION_SESSION := preload("res://scripts/conversation_session.gd")
 
 func _ready() -> void:
 	randomize()
@@ -37,8 +40,10 @@ func _ready() -> void:
 	for agent: WorldAgent in agents.get_children():
 		agent.setup(self, server_url)
 	log_event("World ready. Forest resources are available.")
-	event_panel.visible = log_visible
+	event_panel.visible = true
 	agent_panel.visible = false
+	agent_panel_close.visible = false
+	agent_panel_close.pressed.connect(_close_agent_panel)
 
 func _exit_tree() -> void:
 	if _text_log: _text_log.close()
@@ -68,8 +73,9 @@ func _process(delta: float) -> void:
 		world_tick += 1
 		_tick_seconds = 0.0
 		for agent: WorldAgent in agents.get_children(): agent.apply_needs()
+		_regrow_resources()
+		_expire_conversations()
 	if selected_agent: show_agent_info(selected_agent)
-	_update_camera(delta)
 	_update_selection_indicator()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -79,34 +85,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			for agent: WorldAgent in agents.get_children(): agent.set_debug_visible(debug_visible)
 			get_viewport().set_input_as_handled()
 			return
-		if event.keycode == KEY_L:
-			log_visible = not log_visible
-			event_panel.visible = log_visible
-			get_viewport().set_input_as_handled()
-			return
-	if event is InputEventMouseButton and event.pressed and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
-		var factor := 1.12 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.89
-		var next_zoom := clampf(observer_camera.zoom.x * factor, 0.75, 2.0)
-		observer_camera.zoom = Vector2(next_zoom, next_zoom)
-		get_viewport().set_input_as_handled()
-		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		for agent: WorldAgent in agents.get_children():
 			if agent.global_position.distance_to(get_global_mouse_position()) < 36.0:
 				selected_agent = agent
 				agent_panel.visible = true
+				agent_panel_close.visible = true
 				show_agent_info(agent)
 				get_viewport().set_input_as_handled()
 				return
 
-func _update_camera(delta: float) -> void:
-	var direction := Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
-	# Default UI actions include arrow keys; WASD is intentionally observer-only input.
-	direction += Vector2(float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)), float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W)))
-	if direction.length_squared() > 0.0:
-		observer_camera.position += direction.normalized() * 440.0 * delta
-		observer_camera.position.x = clampf(observer_camera.position.x, 240.0, 720.0)
-		observer_camera.position.y = clampf(observer_camera.position.y, 160.0, 480.0)
+func _close_agent_panel() -> void:
+	selected_agent = null
+	agent_panel.visible = false
+	agent_panel_close.visible = false
 
 func _update_selection_indicator() -> void:
 	for agent: WorldAgent in agents.get_children():
@@ -176,7 +168,7 @@ func build_observation(observer: WorldAgent) -> Dictionary:
 	var visible_ids: Array[String] = []
 	for other: WorldAgent in agents.get_children():
 		if other != observer and observer.global_position.distance_to(other.global_position) <= perception_radius:
-			entities.append({"type": "agent", "id": other.agent_id, "name": other.agent_name})
+			entities.append({"type": "agent", "id": other.agent_id, "name": other.agent_name, "distance": observer.global_position.distance_to(other.global_position)})
 			visible_ids.append(other.agent_id)
 	for entity: Dictionary in environment_entities.values():
 		var position := Vector2(float(entity.world_position.x), float(entity.world_position.y))
@@ -190,7 +182,54 @@ func build_observation(observer: WorldAgent) -> Dictionary:
 				if observer.remember_location(entity):
 					observer.remember({"type": "discovery", "target_id": entity.id, "description": "I found a %s." % entity.type.replace("_", " "), "importance": 7 if observer.hunger > 70 or observer.thirst > 70 else 3})
 					observer._important_event = true
-	return {"id": observer.agent_id, "name": observer.agent_name, "hunger": observer.hunger, "thirst": observer.thirst, "energy": observer.energy, "inventory": observer.inventory, "known_locations": observer.known_locations.values(), "personality": observer.personality, "current_goal": observer.current_goal, "position": {"x": observer.global_position.x, "y": observer.global_position.y}, "visible_entities": entities, "relationships": observer.relationships, "recent_events": observer.recent_events.slice(-8), "relevant_memories": observer.relevant_memories(visible_ids), "conversation_threads": thread_context(observer.agent_id, visible_ids), "pending_messages": observer.pending_messages, "available_actions": WorldAgent.ACTIONS}
+	return {"id": observer.agent_id, "name": observer.agent_name, "hunger": observer.hunger, "thirst": observer.thirst, "energy": observer.energy, "social_need": observer.social_need, "safety": observer.safety, "curiosity_drive": observer.curiosity_drive, "inventory": observer.inventory, "known_locations": observer.known_locations.values(), "personality": observer.personality, "current_goal": observer.current_goal, "position": {"x": observer.global_position.x, "y": observer.global_position.y}, "visible_entities": entities, "relationships": observer.relationships, "recent_events": observer.recent_events.slice(-8), "relevant_memories": observer.relevant_memories(visible_ids), "conversation_threads": thread_context(observer.agent_id, visible_ids), "pending_messages": observer.pending_messages, "decision_guidance": _decision_guidance(observer), "available_intents": _available_intents(observer)}
+
+func _available_intents(observer: WorldAgent) -> Array[String]:
+	var intents: Array[String] = []
+	for intent in WorldAgent.INTENTS:
+		intents.append(str(intent))
+	if observer.hunger < WorldConfig.FOOD_SEARCH_THRESHOLD or not observer.has_item("berry"):
+		intents.erase("consume_item")
+	if not observer.has_item("berry"):
+		intents.erase("give_item")
+	if observer.hunger < WorldConfig.FOOD_SEARCH_THRESHOLD:
+		intents.erase("gather_resource")
+	if observer.hunger >= WorldConfig.FOOD_SEARCH_THRESHOLD and not _has_actionable_resource(observer, "berry_bush"):
+		intents.erase("gather_resource")
+	if observer.thirst < WorldConfig.WATER_SEARCH_THRESHOLD or not _has_actionable_resource(observer, "water"):
+		intents.erase("drink_water")
+	return intents
+
+func available_intents_for(observer: WorldAgent) -> Array[String]:
+	return _available_intents(observer)
+
+func _has_actionable_resource(observer: WorldAgent, resource_type: String) -> bool:
+	for entity: Dictionary in environment_entities.values():
+		if str(entity.get("type", "")) != resource_type: continue
+		if resource_type == "berry_bush" and int(entity.get("berries_available", 0)) <= 0: continue
+		var is_visible := observer.global_position.distance_to(Vector2(float(entity.world_position.x), float(entity.world_position.y))) <= perception_radius
+		if is_visible or observer.known_locations.has(str(entity.id)): return true
+	return false
+
+func _decision_guidance(observer: WorldAgent) -> Array[String]:
+	var guidance: Array[String] = []
+	if observer.hunger < WorldConfig.FOOD_SEARCH_THRESHOLD and observer.thirst < WorldConfig.WATER_SEARCH_THRESHOLD:
+		guidance.append("Food and water are not needed yet. Prefer a short conversation with a visible person, exploration, rest, or waiting.")
+	elif observer.hunger < WorldConfig.FOOD_SEARCH_THRESHOLD:
+		guidance.append("Food is not needed yet. Do not gather or consume food; focus on water only if thirst needs it.")
+	elif observer.thirst < WorldConfig.WATER_SEARCH_THRESHOLD:
+		guidance.append("Water is not needed yet. Do not seek or drink water; focus on food only if hunger needs it.")
+	if observer.thirst <= 25:
+		guidance.append("Your thirst is already satisfied; drinking water again has no useful effect right now.")
+	if observer.hunger >= 70 and observer.has_item("berry"):
+		guidance.append("You are carrying berries while hungry; consuming one directly reduces hunger.")
+	if observer.hunger >= 85 or observer.thirst >= 85:
+		guidance.append("A survival need is critical. Consider food or water before optional exploration or conversation.")
+	for other_id in conversation_threads.keys():
+		var thread: Array = conversation_threads[other_id]
+		if not thread.is_empty() and str(thread.back().get("speaker_id", "")) == observer.agent_id:
+			guidance.append("Your latest message to %s is unanswered; do not send another initiating message yet." % str(thread.back().get("target_id", "that agent")))
+	return guidance.slice(0, 6)
 
 func thread_context(agent_id: String, visible_ids: Array[String]) -> Dictionary:
 	var result: Dictionary = {}
@@ -206,6 +245,121 @@ func describe_visible_entities(observer: WorldAgent) -> String:
 	for entity: Dictionary in environment_entities.values():
 		if observer.global_position.distance_to(Vector2(float(entity.world_position.x), float(entity.world_position.y))) <= perception_radius: names.append(str(entity.name))
 	return ", ".join(names) if not names.is_empty() else "nothing nearby"
+
+func accept_intent(agent: WorldAgent, intent: Dictionary) -> void:
+	var intent_name := str(intent.get("intent", "wait"))
+	var planner := INTENT_PLANNER.new()
+	var plan := planner.plan(intent)
+	log_event("[NEED] %s hunger=%s thirst=%s energy=%s social=%s safety=%s curiosity=%s" % [agent.agent_name, agent.hunger, agent.thirst, agent.energy, agent.social_need, agent.safety, agent.curiosity_drive])
+	log_event("[INTENT] %s: %s%s" % [agent.agent_name, intent_name, " -> %s" % str(intent.get("target_id", "")) if not str(intent.get("target_id", "")).is_empty() else ""])
+	log_event("[PLAN] %s" % planner.describe(plan))
+	agent.start_action(intent_name)
+	agent.set_primitive_plan(plan)
+	_execute_next_primitive(agent)
+
+func _execute_next_primitive(agent: WorldAgent) -> void:
+	var primitive := agent.take_next_primitive()
+	if primitive.is_empty():
+		log_event("[RESULT] %s completed plan" % agent.agent_name)
+		agent.mark_action_completed()
+		return
+	log_event("[ACTION] %s %s" % [str(primitive.type), str(primitive.get("target_id", ""))])
+	var validation := ACTION_VALIDATOR.validate(primitive, _primitive_context(agent, primitive))
+	if not bool(validation.valid):
+		_reject_primitive(agent, primitive, str(validation.reason))
+		return
+	log_event("[VALIDATION] valid")
+	_execute_valid_primitive(agent, primitive)
+
+func _primitive_context(agent: WorldAgent, primitive: Dictionary) -> Dictionary:
+	var target_id := str(primitive.get("target_id", ""))
+	var target: Dictionary = {}
+	if environment_entities.has(target_id): target = environment_entities[target_id]
+	else:
+		var other := _agent_by_id(target_id)
+		if other != null: target = {"id": other.agent_id, "name": other.agent_name, "type": "agent", "world_position": {"x": other.global_position.x, "y": other.global_position.y}}
+	var target_position := Vector2(float(target.get("world_position", {}).get("x", agent.global_position.x)), float(target.get("world_position", {}).get("y", agent.global_position.y)))
+	return {"target": target, "distance": agent.global_position.distance_to(target_position), "interaction_distance": WorldConfig.INTERACTION_DISTANCE, "inventory": agent.inventory}
+
+func _execute_valid_primitive(agent: WorldAgent, primitive: Dictionary) -> void:
+	var type := str(primitive.type)
+	var target_id := str(primitive.get("target_id", ""))
+	var parameters: Dictionary = primitive.get("parameters", {})
+	if type == "MOVE_TO":
+		var destination := _explore_destination(agent) if target_id == "exploration" else _target_position(target_id)
+		var target_name := "exploration" if target_id == "exploration" else _target_name(target_id)
+		agent.begin_approach(primitive, destination, target_name)
+		return
+	if type == "PICK_UP":
+		var entity: Dictionary = environment_entities[target_id]
+		entity.berries_available = int(entity.berries_available) - 1
+		environment_entities[target_id] = entity
+		agent.add_item(str(parameters.get("item", "berry")), 1)
+		log_event("[RESULT] %s picked up Berry" % agent.agent_name)
+		publish_event({"type": "resource_gathered", "actor_id": agent.agent_id, "actor_name": agent.agent_name, "target_id": target_id, "item": str(parameters.get("item", "berry")), "quantity": 1, "position": entity.world_position})
+	elif type == "USE":
+		var old_thirst := agent.thirst
+		agent.thirst = maxi(0, agent.thirst - WorldConfig.WATER_HYDRATION)
+		log_event("[RESULT] %s drank water: %s -> %s" % [agent.agent_name, old_thirst, agent.thirst])
+	elif type == "CONSUME":
+		var item := str(parameters.get("item", "berry"))
+		agent.remove_item(item, 1)
+		agent.hunger = maxi(0, agent.hunger - WorldConfig.BERRY_NUTRITION)
+		log_event("[RESULT] %s consumed %s" % [agent.agent_name, item])
+	elif type == "SPEAK":
+		var target := _agent_by_id(target_id)
+		var message := str(parameters.get("message", ""))
+		if target == null:
+			_reject_primitive(agent, primitive, "recipient no longer exists")
+			return
+		if not _conversation_available(agent, target) or not agent.can_talk_to(target_id, message):
+			log_event("[VALIDATION] SPEAK %s deferred: conversation is unavailable" % target_id)
+			agent.defer_decision("Conversation with %s is temporarily unavailable." % target.agent_name)
+			return
+		agent.remember({"type": "performed_action", "actor_id": agent.agent_id, "target_id": target_id, "description": "I said to %s: %s" % [target.agent_name, message], "importance": 4})
+		_publish_message(agent, target, message)
+		log_event("[RESULT] %s spoke to %s" % [agent.agent_name, target.agent_name])
+	elif type == "DROP":
+		var recipient := _agent_by_id(target_id)
+		var quantity := int(parameters.get("quantity", 1))
+		var dropped_item := str(parameters.get("item", "berry"))
+		agent.remove_item(dropped_item, quantity)
+		recipient.add_item(dropped_item, quantity)
+		agent.remember({"type": "gave_item", "actor_id": agent.agent_id, "target_id": recipient.agent_id, "description": "I gave %s %s to %s." % [quantity, dropped_item, recipient.agent_name], "importance": 6})
+		publish_event({"type": "gift", "actor_id": agent.agent_id, "actor_name": agent.agent_name, "target_agent_id": recipient.agent_id, "target_id": recipient.agent_id, "item": dropped_item, "quantity": quantity, "position": {"x": agent.global_position.x, "y": agent.global_position.y}})
+		log_event("[RESULT] %s gave %s %s to %s" % [agent.agent_name, quantity, dropped_item, recipient.agent_name])
+	elif type == "WAIT":
+		if str(parameters.get("purpose", "")) == "rest":
+			agent.current_action = "rest"
+			log_event("[RESULT] %s is resting" % agent.agent_name)
+			return
+		agent.defer_decision("Waiting until the next decision interval.")
+		log_event("[RESULT] %s waits until the next decision interval" % agent.agent_name)
+		return
+	_execute_next_primitive(agent)
+
+func _reject_primitive(agent: WorldAgent, primitive: Dictionary, reason: String) -> void:
+	var description := ACTION_VALIDATOR.failure_observation(primitive, reason)
+	log_event("[VALIDATION] %s %s rejected: %s" % [str(primitive.type), str(primitive.get("target_id", "")), reason])
+	log_event("[OBSERVATION] %s learned: %s" % [agent.agent_name, description])
+	if reason == "resource is empty":
+		agent.forget_location(str(primitive.get("target_id", "")))
+		agent.remember({"type": "resource_empty", "target_id": str(primitive.get("target_id", "")), "description": description, "importance": 5})
+		agent.defer_decision("The resource is empty; waiting for new information.")
+		return
+	agent.observe_action_failure(description)
+
+func _target_position(target_id: String) -> Vector2:
+	if environment_entities.has(target_id):
+		var position: Dictionary = environment_entities[target_id].world_position
+		return Vector2(float(position.x), float(position.y))
+	var target := _agent_by_id(target_id)
+	return target.global_position if target != null else Vector2.ZERO
+
+func _target_name(target_id: String) -> String:
+	if environment_entities.has(target_id): return str(environment_entities[target_id].name)
+	var target := _agent_by_id(target_id)
+	return target.agent_name if target != null else target_id
 
 func execute_intent(agent: WorldAgent, action: String, target_id: String, message: String, parameters: Dictionary = {}) -> void:
 	match action:
@@ -237,11 +391,11 @@ func _begin_approach(agent: WorldAgent, action: String, target_id: String, messa
 	agent.begin_approach({"action": action, "target_id": target_id, "message": message, "parameters": parameters}, destination, target_name)
 
 func arrived_at_target(agent: WorldAgent) -> void:
-	var intent := agent.take_pending_intent()
-	if intent.is_empty(): agent.mark_action_failed("NAVIGATION_FAILED"); return
-	log_event("%s arrived at %s" % [agent.agent_name, str(intent.target_id)])
+	var primitive := agent.take_pending_intent()
+	if primitive.is_empty(): agent.mark_action_failed("NAVIGATION_FAILED"); return
+	log_event("[RESULT] %s reached %s" % [agent.agent_name, str(primitive.get("target_id", ""))])
 	agent.action_state = WorldAgent.ActionState.EXECUTING
-	execute_intent(agent, str(intent.action), str(intent.target_id), str(intent.message), intent.parameters)
+	_execute_next_primitive(agent)
 
 func _gather(agent: WorldAgent, target_id: String) -> void:
 	var entity: Dictionary = environment_entities.get(target_id, {})
@@ -282,16 +436,77 @@ func _register_environment() -> void:
 	for group in [$SimulationEntities/Trees, $SimulationEntities/BerryBushes, $SimulationEntities/WaterSources, $SimulationEntities/Rocks]:
 		for node in group.get_children():
 			var entity: Dictionary = {"id": node.name.to_lower(), "name": node.name.replace("_", " "), "type": str(node.get_meta("entity_type")), "world_position": {"x": node.global_position.x, "y": node.global_position.y}}
-			if entity.type == "berry_bush": entity["berries_available"] = 5; entity["max_berries"] = 5
+			if entity.type == "berry_bush":
+				entity["berries_available"] = 5
+				entity["max_berries"] = 5
+				entity["last_regrow_tick"] = world_tick
 			environment_entities[entity.id] = entity
 
+func _regrow_resources() -> void:
+	for entity_id in environment_entities.keys():
+		var entity: Dictionary = environment_entities[entity_id]
+		if str(entity.get("type", "")) != "berry_bush": continue
+		if int(entity.get("berries_available", 0)) >= int(entity.get("max_berries", 0)): continue
+		if world_tick - int(entity.get("last_regrow_tick", world_tick)) < WorldConfig.BERRY_REGROW_TICKS: continue
+		entity["berries_available"] = int(entity.berries_available) + 1
+		entity["last_regrow_tick"] = world_tick
+		environment_entities[entity_id] = entity
+		log_event("[RESOURCE] %s regrew a berry (%s/%s)" % [str(entity.name), entity.berries_available, entity.max_berries])
+
 func _publish_message(actor: WorldAgent, target: WorldAgent, text: String) -> void:
-	var event := {"type": "message", "actor_id": actor.agent_id, "actor_name": actor.agent_name, "target_agent_id": target.agent_id, "text": text, "position": {"x": actor.global_position.x, "y": actor.global_position.y}}
-	publish_event(event)
 	var key := _thread_key(actor.agent_id, target.agent_id)
+	var previous_session: Dictionary = conversation_sessions.get(key, {})
+	var is_closing_reply := bool(previous_session.get("ended", false)) and actor.has_pending_from(target.agent_id)
+	# The one reply admitted after the turn cap closes the exchange.  It remains
+	# a visible social event and memory, but does not create another mandatory
+	# response that would bypass the cap indefinitely.
+	var event := {"type": "message", "actor_id": actor.agent_id, "actor_name": actor.agent_name, "target_agent_id": target.agent_id, "text": text, "expects_reply": not is_closing_reply, "position": {"x": actor.global_position.x, "y": actor.global_position.y}}
+	publish_event(event)
 	if not conversation_threads.has(key): conversation_threads[key] = []
 	conversation_threads[key].append({"speaker_id": actor.agent_id, "target_id": target.agent_id, "text": text, "tick": world_tick})
-	log_event("MESSAGE %s → %s: %s" % [actor.agent_name, target.agent_name, text])
+	var session: Dictionary = conversation_sessions.get(key, CONVERSATION_SESSION.start(actor.agent_id, target.agent_id, world_tick))
+	session = CONVERSATION_SESSION.record(session, actor.agent_id, world_tick, WorldConfig.CONVERSATION_MAX_TURNS)
+	conversation_sessions[key] = session
+	# This is the reply point: do not discard a received message merely because
+	# the agent had to move before speaking.
+	actor.resolve_pending_from(target.agent_id)
+	actor.complete_social_interaction(target.agent_id, "spoke")
+	actor.show_conversation(text)
+	log_event("[SOCIAL] %s → %s: %s" % [actor.agent_name, target.agent_name, text])
+	if bool(session.ended):
+		session.ended_tick = world_tick
+		conversation_sessions[key] = session
+		log_event("[SOCIAL] conversation %s ended after %s turns" % [key, session.turn_count])
+
+func _conversation_available(actor: WorldAgent, target: WorldAgent) -> bool:
+	var key := _thread_key(actor.agent_id, target.agent_id)
+	var session: Dictionary = conversation_sessions.get(key, {})
+	# A newly received direct message gets one prompt reply even if the preceding
+	# exchange just reached its turn cap or inactivity boundary.  Without this,
+	# the final speaker in a conversation is systematically left unanswered.
+	if actor.has_pending_from(target.agent_id):
+		return true
+	if session.is_empty():
+		return actor.can_initiate_socially()
+	if bool(session.get("ended", false)):
+		# A completed session cannot instantly restart, but may become a new conversation
+		# after a meaningful pause rather than permanently silencing that pair.
+		if world_tick - int(session.get("ended_tick", world_tick)) >= WorldConfig.CONVERSATION_INACTIVITY_TICKS:
+			conversation_sessions.erase(key)
+			return actor.can_initiate_socially()
+		return false
+	if not CONVERSATION_SESSION.is_available(session, world_tick, WorldConfig.CONVERSATION_MAX_TURNS, WorldConfig.CONVERSATION_INACTIVITY_TICKS):
+		return false
+	return actor.can_initiate_socially()
+
+func _expire_conversations() -> void:
+	for key in conversation_sessions.keys():
+		var session: Dictionary = conversation_sessions[key]
+		if not bool(session.get("ended", false)) and world_tick - int(session.get("last_tick", world_tick)) >= WorldConfig.CONVERSATION_INACTIVITY_TICKS:
+			session.ended = true
+			session.ended_tick = world_tick
+			conversation_sessions[key] = session
+			log_event("[SOCIAL] conversation %s ended due to inactivity" % key)
 
 func publish_event(event: Dictionary) -> void:
 	_event_sequence += 1
@@ -312,6 +527,11 @@ func _agent_by_id(id: String) -> WorldAgent:
 		if agent.agent_id == id: return agent
 	return null
 
+func live_agent_target(id: String) -> Dictionary:
+	var target := _agent_by_id(id)
+	if target == null: return {"found": false}
+	return {"found": true, "position": target.global_position}
+
 func _random_world_position(origin: Vector2) -> Vector2:
 	return Vector2(clampf(origin.x + randf_range(-220, 220), WorldConfig.MAP_BOUNDS.position.x, WorldConfig.MAP_BOUNDS.end.x), clampf(origin.y + randf_range(-180, 180), WorldConfig.MAP_BOUNDS.position.y, WorldConfig.MAP_BOUNDS.end.y))
 
@@ -322,7 +542,7 @@ func show_agent_info(agent: WorldAgent) -> void:
 	for memory: Dictionary in agent.memories.slice(-5): memory_lines.append("• %s" % memory.description)
 	var pending_lines: Array[String] = []
 	for message: Dictionary in agent.pending_messages: pending_lines.append("%s: %s" % [message.speaker_id, message.text])
-	agent_panel.text = "%s\nGoal: %s | Action: %s\nHunger: %s Energy: %s\n\nRelationships: %s\n\nMemories:\n%s\n\nPending messages:\n%s\n\nReason: %s" % [agent.agent_name.to_upper(), agent.current_goal, agent.current_action, agent.hunger, agent.energy, relationships_text, "\n".join(memory_lines) if not memory_lines.is_empty() else "None", "\n".join(pending_lines) if not pending_lines.is_empty() else "None", agent.last_reason]
+	agent_panel.text = "%s\nGoal: %s | Action: %s\nHunger: %s Thirst: %s Energy: %s Social: %s Safety: %s Curiosity: %s\n\nRelationships: %s\n\nMemories:\n%s\n\nPending messages:\n%s\n\nReason: %s" % [agent.agent_name.to_upper(), agent.current_goal, agent.current_action, agent.hunger, agent.thirst, agent.energy, agent.social_need, agent.safety, agent.curiosity_drive, relationships_text, "\n".join(memory_lines) if not memory_lines.is_empty() else "None", "\n".join(pending_lines) if not pending_lines.is_empty() else "None", agent.last_reason]
 
 func log_event(text: String) -> void:
 	var stamp := Time.get_time_string_from_system()

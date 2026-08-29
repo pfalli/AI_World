@@ -4,8 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ActionName = Literal["wander", "explore", "gather", "eat", "drink", "give", "talk", "rest", "wait", "go_to_known"]
 GoalName = Literal["find_food", "find_water", "rest", "explore", "socialize", "help_agent", "idle"]
+IntentName = Literal["gather_resource", "drink_water", "consume_item", "speak", "give_item", "explore", "rest", "wait", "socialize", "request_help", "offer_help", "confront", "avoid"]
 
 
 class Position(BaseModel):
@@ -27,11 +27,16 @@ class Personality(BaseModel):
     curiosity: float = Field(ge=0.0, le=1.0)
     selfishness: float = Field(ge=0.0, le=1.0)
     aggression: float = Field(ge=0.0, le=1.0)
+    sociability: float = Field(ge=0.0, le=1.0)
+    generosity: float = Field(ge=0.0, le=1.0)
+    empathy: float = Field(ge=0.0, le=1.0)
 
 
 class Relationship(BaseModel):
     trust: int = Field(ge=-100, le=100)
     affinity: int = Field(ge=-100, le=100)
+    anger: int = Field(default=0, ge=0, le=100)
+    familiarity: int = Field(default=0, ge=0, le=100)
 
 
 class WorldEvent(BaseModel):
@@ -74,6 +79,9 @@ class AgentState(BaseModel):
     hunger: int = Field(ge=0, le=100)
     thirst: int = Field(ge=0, le=100)
     energy: int = Field(ge=0, le=100)
+    social_need: int = Field(ge=0, le=100)
+    safety: int = Field(ge=0, le=100)
+    curiosity_drive: int = Field(ge=0, le=100)
     personality: Personality
     current_goal: GoalName = "idle"
     position: Position
@@ -85,14 +93,16 @@ class AgentState(BaseModel):
     relevant_memories: list[Memory] = Field(default_factory=list, max_length=8)
     conversation_threads: dict[str, list[ConversationMessage]] = Field(default_factory=dict)
     pending_messages: list[PendingMessage] = Field(default_factory=list, max_length=6)
-    available_actions: list[ActionName]
+    decision_guidance: list[str] = Field(default_factory=list, max_length=6)
+    available_intents: list[IntentName]
 
 
-class AgentDecision(BaseModel):
+class AgentIntent(BaseModel):
     agent_id: str
     goal: GoalName = "idle"
-    action: ActionName
+    intent: IntentName
     target_id: str | None = None
-    parameters: dict[str, str | int] = Field(default_factory=dict)
+    item: str | None = Field(default=None, max_length=100)
+    quantity: int = Field(default=1, ge=1, le=99)
     message: str | None = Field(default=None, max_length=500)
     reason: str = Field(min_length=1, max_length=500)

@@ -1,0 +1,30 @@
+extends SceneTree
+
+const PlannerScript := preload("res://scripts/intent_planner.gd")
+const ValidatorScript := preload("res://scripts/action_validator.gd")
+
+func _init() -> void:
+	var planner = PlannerScript.new()
+	var plan: Array[Dictionary] = planner.plan({"intent": "gather_resource", "target_id": "berry_bush_1", "item": "berry"})
+	assert(plan.size() == 2)
+	assert(plan[0].type == "MOVE_TO")
+	assert(plan[1].type == "PICK_UP")
+	var valid := ValidatorScript.validate(plan[1], {"target": {"type": "berry_bush", "berries_available": 1}, "distance": 20.0, "interaction_distance": 58.0, "inventory": {}})
+	assert(bool(valid.valid))
+	var rejected := ValidatorScript.validate(plan[1], {"target": {"type": "berry_bush", "berries_available": 1}, "distance": 100.0, "interaction_distance": 58.0, "inventory": {}})
+	assert(not bool(rejected.valid))
+	assert(str(rejected.reason) == "too far away")
+	assert(ValidatorScript.failure_observation(plan[1], str(rejected.reason)) == "I cannot pick up: too far away.")
+	var consume := planner.plan({"intent": "consume_item", "item": "berry"})[0]
+	var has_berry := ValidatorScript.validate(consume, {"target": {}, "distance": 0.0, "interaction_distance": 58.0, "inventory": {"berry": 1}})
+	assert(bool(has_berry.valid))
+	var no_berry := ValidatorScript.validate(consume, {"target": {}, "distance": 0.0, "interaction_distance": 58.0, "inventory": {}})
+	assert(not bool(no_berry.valid))
+	var gift_plan: Array[Dictionary] = planner.plan({"intent": "give_item", "target_id": "bob", "item": "berry", "quantity": 1})
+	assert(gift_plan.size() == 2)
+	assert(gift_plan[1].type == "DROP")
+	var valid_gift := ValidatorScript.validate(gift_plan[1], {"target": {"type": "agent"}, "distance": 30.0, "interaction_distance": 58.0, "inventory": {"berry": 1}})
+	assert(bool(valid_gift.valid))
+	var invalid_gift := ValidatorScript.validate(gift_plan[1], {"target": {"type": "agent"}, "distance": 30.0, "interaction_distance": 58.0, "inventory": {}})
+	assert(not bool(invalid_gift.valid))
+	quit()

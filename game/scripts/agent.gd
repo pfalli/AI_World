@@ -6,7 +6,12 @@ extends CharacterBody2D
 @export var hunger := 80
 @export var thirst := 55
 @export var energy := 100
-@export var personality: Dictionary = {"friendliness": 0.5, "cooperation": 0.5, "curiosity": 0.5, "selfishness": 0.5, "aggression": 0.5}
+@export var social_need := 45
+# Safety and curiosity are observable drives. This world has no hazards yet, so safety
+# remains stable; keeping it in state makes future hazards additive rather than invasive.
+@export var safety := 100
+@export var curiosity_drive := 55
+@export var personality: Dictionary = {"friendliness": 0.5, "cooperation": 0.5, "curiosity": 0.5, "selfishness": 0.5, "aggression": 0.5, "sociability": 0.5, "generosity": 0.5, "empathy": 0.5}
 @export var body_color := Color.WHITE
 @export_file("*.png") var walk_sheet_path := "res://assets/character_variants/alice_4DirectionWalk.png"
 @export_file("*.png") var idle_sheet_path := "res://assets/character_variants/alice_4DirectionIdle.png"
@@ -15,9 +20,11 @@ extends CharacterBody2D
 @export var max_memories := 100
 
 const ACTIONS := ["wander", "explore", "gather", "eat", "drink", "give", "talk", "rest", "wait", "go_to_known"]
+const INTENTS := ["gather_resource", "drink_water", "consume_item", "speak", "give_item", "explore", "rest", "wait", "socialize", "request_help", "offer_help", "confront", "avoid"]
 const GOALS := ["find_food", "find_water", "rest", "explore", "socialize", "help_agent", "idle"]
 const SPEED := 115.0
 const CONTEXT_LIMIT := 8
+const SOCIAL_RULES := preload("res://scripts/social_rules.gd")
 enum ActionState { IDLE, APPROACHING_TARGET, EXECUTING, COMPLETED, FAILED }
 var current_action := "wait"
 var current_goal := "idle"
@@ -42,12 +49,15 @@ var _last_messages: Dictionary = {}
 var _decision_in_flight := false
 var _destination := Vector2.ZERO
 var _pending_intent: Dictionary = {}
+var _primitive_plan: Array[Dictionary] = []
 var _urgent_hunger_armed := true
 var _urgent_thirst_armed := true
+var _last_social_interaction_tick := -999
 var ai_request_count := 0
 var _client: AIClient
 var _world: Node
 var _last_facing := "down"
+var _speech_bubble_seconds := 0.0
 
 
 func setup(world: Node, server_address: String) -> void:
@@ -61,10 +71,23 @@ func setup(world: Node, server_address: String) -> void:
 	update_status("Waiting")
 	_decision_loop()
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
+	if _speech_bubble_seconds > 0.0:
+		_speech_bubble_seconds -= delta
+		if _speech_bubble_seconds <= 0.0:
+			$ConversationBubble.visible = false
 	if current_action == "wander" or current_action == "talk" or action_state == ActionState.APPROACHING_TARGET:
+		# Interaction plans keep tracking a moving agent. The logical target remains the
+		# same; only its current simulation position is refreshed before movement.
+		var reached_interaction_range := false
+		if action_state == ActionState.APPROACHING_TARGET:
+			var target_id := str(_pending_intent.get("target_id", ""))
+			var live_target: Dictionary = _world.live_agent_target(target_id)
+			if bool(live_target.get("found", false)):
+				_destination = live_target.position
+				reached_interaction_range = global_position.distance_to(_destination) <= WorldConfig.INTERACTION_DISTANCE * 0.85
 		velocity = global_position.direction_to(_destination) * SPEED
-		if global_position.distance_to(_destination) < 5.0:
+		if reached_interaction_range or global_position.distance_to(_destination) < 5.0:
 			velocity = Vector2.ZERO
 			if action_state == ActionState.APPROACHING_TARGET: _world.arrived_at_target(self)
 			elif current_action == "wander": mark_action_completed()
@@ -146,16 +169,23 @@ func _on_decision_received(decision: Dictionary) -> void:
 	_action_complete = false
 	# Long-running rest/talk actions end before the next committed intent starts.
 	if _active_action_id != 0: mark_action_completed()
-	for pending in pending_messages: pending.pending = false
-	var action := str(decision.get("action", "wait"))
+	var intent := str(decision.get("intent", "wait"))
 	current_goal = str(decision.get("goal", "idle"))
-	if not ACTIONS.has(action): action = "wait"
+	if not INTENTS.has(intent): intent = "wait"
+	var available_intents: Array[String] = _world.available_intents_for(self)
+	if not available_intents.has(intent):
+		_world.log_event("[VALIDATION] %s intent %s is not currently available; waiting instead." % [agent_name, intent])
+		intent = "wait"
+		decision["intent"] = intent
 	if not GOALS.has(current_goal): current_goal = "idle"
 	last_reason = str(decision.get("reason", "No reason provided."))
-	start_action(action)
-	_world.log_event("%s decision %s target=%s" % [agent_name, action.to_upper(), str(decision.get("target_id", ""))])
-	_world.execute_intent(self, action, str(decision.get("target_id", "")), str(decision.get("message", "")), decision.get("parameters", {}))
-	pending_messages.clear()
+	_world.accept_intent(self, decision)
+	# A pending message remains visible while an agent approaches its sender and
+	# is removed only after a successful reply.  Any non-social choice is an
+	# explicit decision to leave the current messages unanswered, which avoids a
+	# request loop while preserving the agent's freedom to ignore someone.
+	if not ["speak", "socialize", "request_help", "offer_help", "confront"].has(intent):
+		pending_messages.clear()
 	_world.show_agent_info(self)
 
 func _on_request_failed(error_text: String) -> void:
@@ -170,16 +200,27 @@ func receive_social_event(event: Dictionary) -> void:
 	if recent_events.size() > CONTEXT_LIMIT: recent_events.pop_front()
 	var event_type := str(event.get("type", "event"))
 	var actor_id := str(event.get("actor_id", ""))
-	if event_type == "message" and str(event.get("target_agent_id", "")) == agent_id:
-		var pending: Dictionary = {"speaker_id": actor_id, "target_id": agent_id, "text": str(event.get("text", "")), "tick": int(event.get("tick", 0)), "pending": true}
-		pending_messages.append(pending)
-		remember({"type": "received_message", "speaker_id": actor_id, "listener_id": agent_id, "message": pending.text, "description": "%s said: %s" % [str(event.get("actor_name", actor_id)), pending.text], "importance": 5})
-		_world.log_event("%s pending messages: %s" % [agent_name, pending_messages.size()])
+	if event_type == "message" and SOCIAL_RULES.is_targeted_at(event, agent_id):
+		var message_text := str(event.get("text", ""))
+		remember({"type": "received_message", "speaker_id": actor_id, "listener_id": agent_id, "message": message_text, "description": "%s said: %s" % [str(event.get("actor_name", actor_id)), message_text], "importance": 5})
+		complete_social_interaction(actor_id, "received a message")
+		var consequence := SOCIAL_RULES.message_consequence(message_text)
+		change_relationship(actor_id, int(consequence.trust), int(consequence.affinity), int(consequence.anger), int(consequence.familiarity), str(consequence.reason))
+		if bool(event.get("expects_reply", true)):
+			var pending: Dictionary = {"speaker_id": actor_id, "target_id": agent_id, "text": message_text, "tick": int(event.get("tick", 0)), "pending": true}
+			pending_messages.append(pending)
+			_world.log_event("%s pending messages: %s" % [agent_name, pending_messages.size()])
+	elif event_type == "gift" and SOCIAL_RULES.is_targeted_at(event, agent_id):
+		var item := str(event.get("item", "item"))
+		var amount := int(event.get("quantity", 1))
+		remember({"type": "received_gift", "actor_id": actor_id, "target_id": agent_id, "description": "%s gave me %s %s." % [str(event.get("actor_name", actor_id)), amount, item], "importance": 8})
+		change_relationship(actor_id, WorldConfig.GIVE_TRUST, WorldConfig.GIVE_AFFINITY, -4, 5, "received help")
+		complete_social_interaction(actor_id, "received help")
 	elif event_type == "resource_taken" and actor_id != agent_id:
 		var importance: int = 8 if hunger > 70 else 3
 		var description: String = "%s took the only available food while I was very hungry." % str(event.get("actor_name", actor_id)) if hunger > 70 else "%s took an apple." % str(event.get("actor_name", actor_id))
 		remember({"type": "observed_action", "actor_id": actor_id, "target_id": str(event.get("target_id", "")), "description": description, "importance": importance})
-		if hunger > 50: change_relationship(actor_id, -15, -5)
+		if hunger > 50: change_relationship(actor_id, -15, -5, 12, 1, "observed resource loss")
 		_important_event = true
 		_world.log_event("%s interpreted event importance=%s" % [agent_name, importance])
 
@@ -194,7 +235,8 @@ func remember(data: Dictionary) -> void:
 func relevant_memories(visible_ids: Array) -> Array[Dictionary]:
 	var scored: Array[Dictionary] = []
 	for memory: Dictionary in memories:
-		var relevance := 4 if visible_ids.has(memory.get("actor_id", "")) else 0
+		var actor_id: Variant = memory.get("actor_id", "")
+		var relevance := 4 if actor_id is String and visible_ids.has(actor_id) else 0
 		var age: int = maxi(0, _world.world_tick - int(memory.tick))
 		var copy: Dictionary = memory.duplicate()
 		copy["_score"] = int(memory.importance) * 10 + relevance - mini(age, 30)
@@ -202,14 +244,24 @@ func relevant_memories(visible_ids: Array) -> Array[Dictionary]:
 	scored.sort_custom(func(a: Dictionary, b: Dictionary): return int(a._score) > int(b._score))
 	return scored.slice(0, CONTEXT_LIMIT)
 
-func change_relationship(other_id: String, trust_delta: int, affinity_delta: int) -> void:
+func change_relationship(other_id: String, trust_delta: int, affinity_delta: int, anger_delta := 0, familiarity_delta := 0, reason := "") -> void:
 	if other_id.is_empty() or other_id == agent_id: return
-	var relation: Dictionary = relationships.get(other_id, {"trust": 0, "affinity": 0})
+	var relation: Dictionary = relationships.get(other_id, {"trust": 0, "affinity": 0, "anger": 0, "familiarity": 0})
 	var old_trust: int = int(relation.trust)
-	relation.trust = clampi(old_trust + trust_delta, -100, 100)
-	relation.affinity = clampi(int(relation.affinity) + affinity_delta, -100, 100)
+	var old_affinity: int = int(relation.affinity)
+	var old_anger: int = int(relation.get("anger", 0))
+	var old_familiarity: int = int(relation.get("familiarity", 0))
+	relation = SOCIAL_RULES.adjust_relation(relation, trust_delta, affinity_delta, anger_delta, familiarity_delta)
 	relationships[other_id] = relation
-	_world.log_event("%s relationship %s trust %s -> %s" % [agent_name, other_id, old_trust, relation.trust])
+	_world.log_event("[RELATIONSHIP] %s -> %s trust %s -> %s affinity %s -> %s anger %s -> %s familiarity %s -> %s%s" % [agent_name, other_id, old_trust, relation.trust, old_affinity, relation.affinity, old_anger, relation.anger, old_familiarity, relation.familiarity, " (%s)" % reason if not reason.is_empty() else ""])
+
+func complete_social_interaction(other_id: String, reason := "conversation") -> void:
+	social_need = maxi(0, social_need - WorldConfig.SOCIAL_INTERACTION_RELIEF)
+	_last_social_interaction_tick = _world.world_tick
+	_world.log_event("[SOCIAL] %s %s with %s; social need=%s" % [agent_name, reason, other_id, social_need])
+
+func can_initiate_socially() -> bool:
+	return _world.world_tick - _last_social_interaction_tick >= WorldConfig.SOCIAL_INITIATION_COOLDOWN
 
 func can_talk_to(target_id: String, message: String) -> bool:
 	if message.strip_edges().is_empty(): return false
@@ -226,6 +278,11 @@ func has_pending_from(other_id: String) -> bool:
 	for pending: Dictionary in pending_messages:
 		if pending.speaker_id == other_id: return true
 	return false
+
+func resolve_pending_from(other_id: String) -> void:
+	for index in range(pending_messages.size() - 1, -1, -1):
+		if str(pending_messages[index].get("speaker_id", "")) == other_id:
+			pending_messages.remove_at(index)
 
 func set_wander_destination(destination: Vector2) -> void:
 	current_action = "wander"; _destination = destination; update_status("Wandering — %s" % current_goal)
@@ -248,12 +305,41 @@ func start_action(action: String) -> void:
 	_world.log_event("%s ACTION #%s %s started" % [agent_name, _active_action_id, action.to_upper()])
 
 func begin_approach(intent: Dictionary, destination: Vector2, target_name: String) -> void:
-	_pending_intent = intent; _destination = destination; current_action = str(intent.action); action_state = ActionState.APPROACHING_TARGET; _action_complete = false
+	_pending_intent = intent; _destination = destination; current_action = str(intent.get("type", intent.get("action", "move_to"))); action_state = ActionState.APPROACHING_TARGET; _action_complete = false
 	update_status("Approaching %s" % target_name)
 	_world.log_event("%s state=APPROACHING_TARGET target=%s" % [agent_name, target_name])
 
 func take_pending_intent() -> Dictionary:
 	var intent := _pending_intent; _pending_intent = {}; return intent
+
+func set_primitive_plan(plan: Array[Dictionary]) -> void:
+	_primitive_plan = plan.duplicate(true)
+
+func take_next_primitive() -> Dictionary:
+	if _primitive_plan.is_empty(): return {}
+	return _primitive_plan.pop_front()
+
+func observe_action_failure(observation: String) -> void:
+	last_reason = observation
+	remember({"type": "action_failure", "description": observation, "importance": 6})
+	_important_event = true
+	mark_action_failed(observation)
+
+func defer_decision(reason: String) -> void:
+	# A temporary social cooldown is expected state, not a failed-world observation.
+	last_reason = reason
+	_pending_intent = {}
+	_primitive_plan.clear()
+	_destination = global_position
+	velocity = Vector2.ZERO
+	_active_action_id = 0
+	_active_action_name = ""
+	current_action = "wait"
+	action_state = ActionState.IDLE
+	_action_complete = false
+	last_decision_tick = _world.world_tick
+	update_status("Waiting — %s" % current_goal)
+	_world.log_event("%s defers decision: %s" % [agent_name, reason])
 
 func mark_action_completed() -> void:
 	if _active_action_id == 0 or action_state == ActionState.COMPLETED or action_state == ActionState.IDLE: return
@@ -273,6 +359,13 @@ func mark_action_failed(reason: String) -> void:
 
 func update_status(text: String) -> void:
 	$NameLabel.text = agent_name
+
+func show_conversation(text: String) -> void:
+	var trimmed := text.strip_edges()
+	if trimmed.is_empty(): return
+	$ConversationBubble/Message.text = trimmed
+	$ConversationBubble.visible = true
+	_speech_bubble_seconds = 4.5
 
 func add_item(item: String, quantity: int) -> void:
 	inventory[item] = int(inventory.get(item, 0)) + quantity
@@ -294,9 +387,14 @@ func remember_location(entity: Dictionary) -> bool:
 	known_locations[id] = {"entity_id": id, "entity_type": str(entity.type), "last_known_position": entity.world_position, "last_seen_tick": _world.world_tick}
 	return is_new
 
+func forget_location(entity_id: String) -> void:
+	known_locations.erase(entity_id)
+
 func apply_needs() -> void:
 	hunger = clampi(hunger + int(WorldConfig.HUNGER_PER_TICK), 0, 100)
 	thirst = clampi(thirst + int(WorldConfig.THIRST_PER_TICK), 0, 100)
+	if current_action != "talk": social_need = clampi(social_need + int(WorldConfig.SOCIAL_NEED_PER_TICK), 0, 100)
+	curiosity_drive = clampi(curiosity_drive + (1 if current_action == "wait" else 0), 0, 100)
 	if current_action == "rest": energy = mini(100, energy + int(WorldConfig.REST_ENERGY_PER_TICK))
 	elif current_action != "wait": energy = maxi(0, energy - int(WorldConfig.ENERGY_ACTIVE_PER_TICK))
 	if hunger <= 55: _urgent_hunger_armed = true
