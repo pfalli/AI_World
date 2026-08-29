@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ai_provider import decide
-from models import AgentDecision, AgentState
+from models import AgentIntent, AgentState
 
 load_dotenv()
 app = FastAPI(title="AI World Decision Server")
@@ -24,8 +24,8 @@ app.add_middleware(
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
-@app.post("/decide", response_model=AgentDecision)
-def make_decision(state: AgentState) -> AgentDecision:
+@app.post("/decide", response_model=AgentIntent)
+def make_decision(state: AgentState) -> AgentIntent:
     try:
         return decide(state)
     except (ValueError, RuntimeError) as error:

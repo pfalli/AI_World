@@ -13,13 +13,16 @@ def state_for(agent_id: str, memories: list[dict], pending: list[dict] | None = 
         "hunger": 40,
         "thirst": 30,
         "energy": 90,
-        "personality": {"friendliness": .5, "cooperation": .5, "curiosity": .5, "selfishness": .5, "aggression": .2},
+        "personality": {"friendliness": .5, "cooperation": .5, "curiosity": .5, "selfishness": .5, "aggression": .2, "sociability": .3, "generosity": .5, "empathy": .5},
+        "social_need": 20,
+        "safety": 100,
+        "curiosity_drive": 50,
         "current_goal": "idle",
         "position": {"x": 0, "y": 0},
         "visible_entities": [{"type": "agent", "id": "alice", "name": "Alice"}, {"type": "agent", "id": "bob", "name": "Bob"}],
         "relevant_memories": memories,
         "pending_messages": pending or [],
-        "available_actions": ["talk", "explore", "wander", "wait"],
+        "available_intents": ["speak", "explore", "wait"],
     })
 
 
@@ -36,7 +39,21 @@ class FakeProviderGroundingTests(unittest.TestCase):
 
     def test_no_pending_context_ends_with_non_talk_action(self) -> None:
         alice = state_for("alice", [])
-        self.assertEqual(fake_decide(alice).action, "explore")
+        self.assertEqual(fake_decide(alice).intent, "explore")
+
+    def test_social_personality_can_initiate_a_contextual_conversation(self) -> None:
+        alice = state_for("alice", [])
+        alice.social_need = 70
+        alice.personality.sociability = .9
+        decision = fake_decide(alice)
+        self.assertEqual(decision.intent, "socialize")
+        self.assertEqual(decision.target_id, "bob")
+
+    def test_reserved_personality_keeps_exploring_with_the_same_social_need(self) -> None:
+        bob = state_for("bob", [])
+        bob.social_need = 70
+        bob.personality.sociability = .1
+        self.assertEqual(fake_decide(bob).intent, "explore")
 
 
 if __name__ == "__main__":
