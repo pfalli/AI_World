@@ -1,5 +1,7 @@
 extends Node2D
 
+signal structured_event_recorded(record: Dictionary)
+
 var server_url := ""
 @export var perception_radius := WorldConfig.PERCEPTION_RADIUS
 var environment_entities: Dictionary = {}
@@ -9,6 +11,11 @@ var _event_sequence := 0
 var conversation_threads: Dictionary = {}
 var conversation_sessions: Dictionary = {}
 var selected_agent: WorldAgent
+var experiment_config: ExperimentConfig
+var simulation_paused := true
+var simulation_speed := 1.0
+var world_history: Array[Dictionary] = []
+var raw_log: Array[String] = []
 var _text_log: FileAccess
 var _jsonl_log: FileAccess
 @onready var agents: Node2D = $SimulationEntities/Agents
@@ -28,10 +35,39 @@ const API_CONFIG := preload("res://scripts/api_config.gd")
 const INTENT_PLANNER := preload("res://scripts/intent_planner.gd")
 const ACTION_VALIDATOR := preload("res://scripts/action_validator.gd")
 const CONVERSATION_SESSION := preload("res://scripts/conversation_session.gd")
+const AGENT_SCENE := preload("res://scenes/agent.tscn")
+
+func configure(config: ExperimentConfig) -> void:
+	experiment_config = config
+	simulation_speed = config.simulation_speed
+
+func _apply_experiment_configuration() -> void:
+	if experiment_config == null: return
+	var configured_agents := experiment_config.agents
+	while agents.get_child_count() > configured_agents.size():
+		var extra := agents.get_child(agents.get_child_count() - 1)
+		agents.remove_child(extra)
+		extra.free()
+	while agents.get_child_count() < configured_agents.size():
+		agents.add_child(AGENT_SCENE.instantiate())
+	for index in range(configured_agents.size()):
+		var agent: WorldAgent = agents.get_child(index)
+		var config: AgentConfig = configured_agents[index]
+		agent.agent_id = config.agent_id
+		agent.agent_name = config.agent_name
+		agent.personality = config.personality.duplicate(true)
+		agent.background = config.background
+		agent.initial_goal = config.initial_goal
+		var variant := config.visual_variant if ["alice", "bob", "charlie"].has(config.visual_variant) else "alice"
+		agent.walk_sheet_path = "res://assets/character_variants/%s_4DirectionWalk.png" % variant
+		agent.idle_sheet_path = "res://assets/character_variants/%s_4DirectionIdle.png" % variant
+		if index >= 3:
+			agent.global_position = Vector2(430 + (index % 3) * 55, 250 + (index / 3) * 70)
 
 func _ready() -> void:
 	randomize()
 	server_url = API_CONFIG.base_url()
+	_apply_experiment_configuration()
 	_build_visual_world()
 	_build_resource_visuals()
 	_open_simulation_logs()
@@ -39,7 +75,10 @@ func _ready() -> void:
 	_register_environment()
 	for agent: WorldAgent in agents.get_children():
 		agent.setup(self, server_url)
+	set_simulation_paused(simulation_paused)
+	set_simulation_speed(simulation_speed)
 	log_event("World ready. Forest resources are available.")
+	record_history("world", "", "", "", "World '%s' is ready." % (experiment_config.world_name if experiment_config != null else "Forest Experiment"))
 	event_panel.visible = true
 	agent_panel.visible = false
 	agent_panel_close.visible = false
@@ -68,6 +107,7 @@ func _open_simulation_logs() -> void:
 	_jsonl_log.flush()
 
 func _process(delta: float) -> void:
+	if simulation_paused: return
 	_tick_seconds += delta
 	if _tick_seconds >= 1.0:
 		world_tick += 1
@@ -77,6 +117,26 @@ func _process(delta: float) -> void:
 		_expire_conversations()
 	if selected_agent: show_agent_info(selected_agent)
 	_update_selection_indicator()
+
+func set_simulation_paused(value: bool) -> void:
+	simulation_paused = value
+	for agent: WorldAgent in agents.get_children():
+		agent.set_simulation_paused(value)
+
+func set_simulation_speed(value: float) -> void:
+	simulation_speed = value
+	Engine.time_scale = value
+
+func world_clock() -> String:
+	var day := 1 + world_tick / 1440
+	var minutes := world_tick % 1440
+	return "Day %s · %02d:%02d" % [day, minutes / 60, minutes % 60]
+
+func record_history(type: String, actor := "", target := "", object := "", description := "") -> void:
+	var record := {"tick": world_tick, "time": world_clock(), "type": type, "actor": actor, "target": target, "object": object, "description": description}
+	world_history.append(record)
+	if world_history.size() > 300: world_history.pop_front()
+	structured_event_recorded.emit(record)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -181,6 +241,7 @@ func build_observation(observer: WorldAgent) -> Dictionary:
 			if entity.type == "berry_bush" or entity.type == "water":
 				if observer.remember_location(entity):
 					observer.remember({"type": "discovery", "target_id": entity.id, "description": "I found a %s." % entity.type.replace("_", " "), "importance": 7 if observer.hunger > 70 or observer.thirst > 70 else 3})
+					record_history("discovery", observer.agent_name, "", str(entity.name), "%s discovered %s." % [observer.agent_name, str(entity.name)])
 					observer._important_event = true
 	return {"id": observer.agent_id, "name": observer.agent_name, "hunger": observer.hunger, "thirst": observer.thirst, "energy": observer.energy, "social_need": observer.social_need, "safety": observer.safety, "curiosity_drive": observer.curiosity_drive, "inventory": observer.inventory, "known_locations": observer.known_locations.values(), "personality": observer.personality, "current_goal": observer.current_goal, "position": {"x": observer.global_position.x, "y": observer.global_position.y}, "visible_entities": entities, "relationships": observer.relationships, "recent_events": observer.recent_events.slice(-8), "relevant_memories": observer.relevant_memories(visible_ids), "conversation_threads": thread_context(observer.agent_id, visible_ids), "pending_messages": observer.pending_messages, "decision_guidance": _decision_guidance(observer), "available_intents": _available_intents(observer)}
 
@@ -296,16 +357,19 @@ func _execute_valid_primitive(agent: WorldAgent, primitive: Dictionary) -> void:
 		environment_entities[target_id] = entity
 		agent.add_item(str(parameters.get("item", "berry")), 1)
 		log_event("[RESULT] %s picked up Berry" % agent.agent_name)
+		record_history("resource", agent.agent_name, "", "Berry", "%s gathered a berry from %s." % [agent.agent_name, str(entity.name)])
 		publish_event({"type": "resource_gathered", "actor_id": agent.agent_id, "actor_name": agent.agent_name, "target_id": target_id, "item": str(parameters.get("item", "berry")), "quantity": 1, "position": entity.world_position})
 	elif type == "USE":
 		var old_thirst := agent.thirst
 		agent.thirst = maxi(0, agent.thirst - WorldConfig.WATER_HYDRATION)
 		log_event("[RESULT] %s drank water: %s -> %s" % [agent.agent_name, old_thirst, agent.thirst])
+		record_history("resource", agent.agent_name, "", "Water", "%s drank from the water source." % agent.agent_name)
 	elif type == "CONSUME":
 		var item := str(parameters.get("item", "berry"))
 		agent.remove_item(item, 1)
 		agent.hunger = maxi(0, agent.hunger - WorldConfig.BERRY_NUTRITION)
 		log_event("[RESULT] %s consumed %s" % [agent.agent_name, item])
+		record_history("resource", agent.agent_name, "", item, "%s ate %s." % [agent.agent_name, item])
 	elif type == "SPEAK":
 		var target := _agent_by_id(target_id)
 		var message := str(parameters.get("message", ""))
@@ -328,6 +392,7 @@ func _execute_valid_primitive(agent: WorldAgent, primitive: Dictionary) -> void:
 		agent.remember({"type": "gave_item", "actor_id": agent.agent_id, "target_id": recipient.agent_id, "description": "I gave %s %s to %s." % [quantity, dropped_item, recipient.agent_name], "importance": 6})
 		publish_event({"type": "gift", "actor_id": agent.agent_id, "actor_name": agent.agent_name, "target_agent_id": recipient.agent_id, "target_id": recipient.agent_id, "item": dropped_item, "quantity": quantity, "position": {"x": agent.global_position.x, "y": agent.global_position.y}})
 		log_event("[RESULT] %s gave %s %s to %s" % [agent.agent_name, quantity, dropped_item, recipient.agent_name])
+		record_history("social", agent.agent_name, recipient.agent_name, dropped_item, "%s gave %s %s to %s." % [agent.agent_name, quantity, dropped_item, recipient.agent_name])
 	elif type == "WAIT":
 		if str(parameters.get("purpose", "")) == "rest":
 			agent.current_action = "rest"
@@ -342,6 +407,7 @@ func _reject_primitive(agent: WorldAgent, primitive: Dictionary, reason: String)
 	var description := ACTION_VALIDATOR.failure_observation(primitive, reason)
 	log_event("[VALIDATION] %s %s rejected: %s" % [str(primitive.type), str(primitive.get("target_id", "")), reason])
 	log_event("[OBSERVATION] %s learned: %s" % [agent.agent_name, description])
+	record_history("agent", agent.agent_name, str(primitive.get("target_id", "")), "", "%s could not complete an action: %s" % [agent.agent_name, reason])
 	if reason == "resource is empty":
 		agent.forget_location(str(primitive.get("target_id", "")))
 		agent.remember({"type": "resource_empty", "target_id": str(primitive.get("target_id", "")), "description": description, "importance": 5})
@@ -437,8 +503,9 @@ func _register_environment() -> void:
 		for node in group.get_children():
 			var entity: Dictionary = {"id": node.name.to_lower(), "name": node.name.replace("_", " "), "type": str(node.get_meta("entity_type")), "world_position": {"x": node.global_position.x, "y": node.global_position.y}}
 			if entity.type == "berry_bush":
-				entity["berries_available"] = 5
-				entity["max_berries"] = 5
+				var food_amount := experiment_config.food_amount() if experiment_config != null else 5
+				entity["berries_available"] = food_amount
+				entity["max_berries"] = food_amount
 				entity["last_regrow_tick"] = world_tick
 			environment_entities[entity.id] = entity
 
@@ -473,6 +540,7 @@ func _publish_message(actor: WorldAgent, target: WorldAgent, text: String) -> vo
 	actor.complete_social_interaction(target.agent_id, "spoke")
 	actor.show_conversation(text)
 	log_event("[SOCIAL] %s → %s: %s" % [actor.agent_name, target.agent_name, text])
+	record_history("social", actor.agent_name, target.agent_name, "", "%s spoke to %s: %s" % [actor.agent_name, target.agent_name, text])
 	if bool(session.ended):
 		session.ended_tick = world_tick
 		conversation_sessions[key] = session
@@ -546,6 +614,8 @@ func show_agent_info(agent: WorldAgent) -> void:
 
 func log_event(text: String) -> void:
 	var stamp := Time.get_time_string_from_system()
+	raw_log.append("[%s] %s" % [stamp, text])
+	if raw_log.size() > 250: raw_log.pop_front()
 	event_panel.text += "[%s] %s\n" % [stamp, text]
 	event_panel.scroll_vertical = event_panel.get_line_count()
 	if _text_log:

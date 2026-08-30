@@ -12,6 +12,8 @@ extends CharacterBody2D
 @export var safety := 100
 @export var curiosity_drive := 55
 @export var personality: Dictionary = {"friendliness": 0.5, "cooperation": 0.5, "curiosity": 0.5, "selfishness": 0.5, "aggression": 0.5, "sociability": 0.5, "generosity": 0.5, "empathy": 0.5}
+@export_multiline var background := ""
+@export_multiline var initial_goal := "Survive and understand the world."
 @export var body_color := Color.WHITE
 @export_file("*.png") var walk_sheet_path := "res://assets/character_variants/alice_4DirectionWalk.png"
 @export_file("*.png") var idle_sheet_path := "res://assets/character_variants/alice_4DirectionIdle.png"
@@ -58,6 +60,8 @@ var _client: AIClient
 var _world: Node
 var _last_facing := "down"
 var _speech_bubble_seconds := 0.0
+var simulation_paused := false
+var _queued_decision: Dictionary = {}
 
 
 func setup(world: Node, server_address: String) -> void:
@@ -68,10 +72,13 @@ func setup(world: Node, server_address: String) -> void:
 	_client.decision_received.connect(_on_decision_received)
 	_client.request_failed.connect(_on_request_failed)
 	_setup_visuals()
+	if not background.strip_edges().is_empty():
+		remember({"type": "background", "description": "Background: %s" % background, "importance": 2})
 	update_status("Waiting")
 	_decision_loop()
 
 func _physics_process(delta: float) -> void:
+	if simulation_paused: return
 	if _speech_bubble_seconds > 0.0:
 		_speech_bubble_seconds -= delta
 		if _speech_bubble_seconds <= 0.0:
@@ -140,6 +147,9 @@ func set_debug_visible(value: bool) -> void:
 
 func _decision_loop() -> void:
 	while is_instance_valid(_world):
+		if simulation_paused:
+			await get_tree().create_timer(0.25).timeout
+			continue
 		var trigger := should_request_decision()
 		if not trigger.is_empty():
 			_decision_reason = trigger
@@ -163,6 +173,10 @@ func should_request_decision() -> String:
 	return ""
 
 func _on_decision_received(decision: Dictionary) -> void:
+	if simulation_paused:
+		_decision_in_flight = false
+		_queued_decision = decision.duplicate(true)
+		return
 	_decision_in_flight = false
 	last_decision_tick = _world.world_tick
 	_important_event = false
@@ -194,6 +208,13 @@ func _on_request_failed(error_text: String) -> void:
 	wait_safely()
 	last_reason = "AI unavailable; safe fallback."
 	_world.log_event("%s AI fallback: %s" % [agent_name, error_text])
+
+func set_simulation_paused(value: bool) -> void:
+	simulation_paused = value
+	if not simulation_paused and not _queued_decision.is_empty():
+		var queued := _queued_decision
+		_queued_decision = {}
+		call_deferred("_on_decision_received", queued)
 
 func receive_social_event(event: Dictionary) -> void:
 	recent_events.append(event)
@@ -254,6 +275,7 @@ func change_relationship(other_id: String, trust_delta: int, affinity_delta: int
 	relation = SOCIAL_RULES.adjust_relation(relation, trust_delta, affinity_delta, anger_delta, familiarity_delta)
 	relationships[other_id] = relation
 	_world.log_event("[RELATIONSHIP] %s -> %s trust %s -> %s affinity %s -> %s anger %s -> %s familiarity %s -> %s%s" % [agent_name, other_id, old_trust, relation.trust, old_affinity, relation.affinity, old_anger, relation.anger, old_familiarity, relation.familiarity, " (%s)" % reason if not reason.is_empty() else ""])
+	_world.record_history("social", agent_name, other_id, "", "%s's relationship with %s changed (trust %s, affinity %s, anger %s)." % [agent_name, other_id, relation.trust, relation.affinity, relation.anger])
 
 func complete_social_interaction(other_id: String, reason := "conversation") -> void:
 	social_need = maxi(0, social_need - WorldConfig.SOCIAL_INTERACTION_RELIEF)

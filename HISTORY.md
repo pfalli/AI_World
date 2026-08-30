@@ -161,3 +161,27 @@ The project still intentionally excludes survival-world features and persistence
 - A received message now remains pending while an agent moves to reply and is resolved only after a successful `SPEAK` to that sender. A non-social decision remains an explicit choice to leave messages unanswered, preventing request loops while retaining autonomous behaviour.
 - Direct replies are permitted across a just-closed session boundary so the last speaker is not stranded. That single closing reply is still logged and remembered but does not request yet another response, preserving the session cap. Sessions now allow eight short turns and use a longer inactivity window (90 logical ticks), reducing artificial cut-offs without changing movement, needs, or resource behaviour.
 - Updated the provider instruction to prioritize concise, on-topic replies to visible pending speakers except in critical survival situations.
+
+## 2026-08-30 — V8 application shell and simulation inspection
+
+- Added the application flow: landing menu, world configuration, inhabitant creator, real initialization state, and an observer-oriented simulation HUD.
+- Added `ExperimentConfig` and `AgentConfig` resources. Setup values now configure the instantiated forest world's real agent IDs, names, personality dictionaries, biographies, goals, visual variants, initial food amount, and simulation speed.
+- Added pause/resume, 1×/2×/4×/16× controls, a live agent inspector, normal-mode meaningful event feed, full filtered world-history panel, and a separate raw developer-log view.
+- World history records resource use, social messages, relationship changes, discoveries, failed actions, and world initialization from the existing simulation execution paths.
+
+## 2026-08-30 — Inhabitant creator layout refinement
+
+- Rebuilt the inhabitant creator for the fixed 960×640 application viewport: a persistent Alice/Bob/Charlie selector strip now sits above a vertically scrollable editor, with compact Back and Start World controls kept visible in the footer.
+- Agent selection saves the current form before switching, so every configured name, personality value, biography, and goal remains editable without content being clipped or hidden below the screen.
+- Replaced the vertically stacked personality inputs with six compact, two-column slider cards. Each card shows the trait, a plain-language tendency description, a slider, and its live numeric value for quick comparison and adjustment.
+
+## 2026-08-30 — Simulation screen hierarchy refinement
+
+- Reworked the simulation header into a two-row information table containing application identity, world name, world time, live simulation counts, status, and controls.
+- Framed the forest as a distinct clickable observation viewport beneath the header while retaining the existing event feed, inspector, history, and developer views.
+
+## 2026-08-30 — Dedicated simulation viewport
+
+- Moved the running Godot world into a real `SubViewportContainer` below the application header. The forest is now a bounded render surface, not a full-screen scene hidden behind UI panels.
+- The top status table and right-side event/inspector panels occupy separate application regions, so they no longer overlap the visible world.
+- Enlarged the forest viewport to 700×500 pixels and narrowed the separate side tools accordingly, giving the autonomous world substantially more visual space without reintroducing UI overlap.
